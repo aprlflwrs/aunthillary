@@ -41,8 +41,25 @@ class ColonyParams(val params: Params) {
     val foodDeposit = p("ants.foodDeposit", "Food pheromone laid (per s)", "Ants", 0.0, 10.0, 0.01, 1.0)
     /** Speed is divided by (1 + this × |grade|), grade being rise over run along the ant's heading. */
     val slopePenalty = p("ants.slopePenalty", "Slope slowdown", "Ants", 0.0, 20.0, 0.1, 3.0)
-    val lifespan = p("ants.lifespan", "Lifespan (s)", "Ants", 10.0, 100_000.0, 10.0, 150.0)
+    /** Old age. Long, so that a fed colony's ants mostly die of age and its membership keeps turning over. */
+    val lifespan = p("ants.lifespan", "Lifespan (s)", "Ants", 10.0, 100_000.0, 10.0, 600.0)
     val lifespanJitter = p("ants.lifespanJitter", "Lifespan spread (±fraction)", "Ants", 0.0, 0.9, 0.01, 0.2)
+
+    // ---- Hunger ----
+    // An ant's energy runs from 1 (full) to 0 (starved). It falls with distance walked and, much
+    // more slowly, with time, and is refilled from the store whenever the ant is at the nest.
+    /** Distance a full ant can walk before starving (time costs come on top). */
+    val range = p("hunger.range", "Walking range on a full stomach (units)", "Hunger", 50.0, 10_000.0, 10.0, 1200.0)
+    /** How long a full ant can stand still before starving. */
+    val fastingTime = p("hunger.fastingTime", "Survival without walking (s)", "Hunger", 10.0, 10_000.0, 10.0, 600.0)
+    /**
+     * A searching ant turns home to eat when its remaining range falls below
+     * returnSafety × (distance to the nest) + returnMargin, so ants rarely starve on the way back.
+     */
+    val returnSafety = p("hunger.returnSafety", "Turn home when range < this × distance home", "Hunger", 1.0, 5.0, 0.05, 2.0)
+    val returnMargin = p("hunger.returnMargin", "… plus this (units)", "Hunger", 0.0, 500.0, 1.0, 50.0)
+    /** Food it takes to fill an empty ant. */
+    val mealSize = p("hunger.mealSize", "Food per full meal", "Hunger", 0.01, 10.0, 0.01, 0.75)
 
     // ---- Castes ----
     val scoutShare = p("castes.scoutShare", "Scout share", "Castes", 0.0, 1.0, 0.01, 0.15)
@@ -56,7 +73,7 @@ class ColonyParams(val params: Params) {
     /** Time constant over which the distribution forgets past returns. */
     val headingMemory = p("headings.memory", "Memory (s)", "Headings", 1.0, 600.0, 1.0, 60.0)
     /** How much one empty-handed return counts against its direction (one food delivery counts 1). */
-    val emptyWeight = p("headings.emptyWeight", "Empty-handed return weight", "Headings", 0.0, 10.0, 0.05, 0.5)
+    val emptyWeight = p("headings.emptyWeight", "Empty-handed return weight", "Headings", 0.0, 10.0, 0.05, 0.2)
     /** Pseudo-returns spread evenly over all directions, so a handful of returns can't make a peak. */
     val headingPrior = p("headings.prior", "Even prior (returns)", "Headings", 0.0, 10_000.0, 10.0, 200.0)
 
@@ -65,7 +82,13 @@ class ColonyParams(val params: Params) {
     val symbolDisappear = p("symbols.disappear", "Disappear below (× even share)", "Symbols", 1.0, 5.0, 0.05, 1.25)
 
     // ---- Food ----
-    val pileAmount = p("food.pileAmount", "New pile size", "Food", 10.0, 500_000.0, 10.0, 30_000.0)
+    val pileAmount = p("food.pileAmount", "New pile size", "Food", 10.0, 500_000.0, 10.0, 40_000.0)
+    /**
+     * How many units per second ants can cut from one pile, however many are there. This is what
+     * makes more food support more ants: deliveries stop growing with the population once every
+     * pile is worked at this rate, so the colony settles where they balance what it eats.
+     */
+    val pileYield = p("food.pileYield", "Yield per pile (units/s)", "Food", 1.0, 2000.0, 1.0, 30.0)
     val pickupRadius = p("food.pickupRadius", "Pickup radius (units)", "Food", 0.5, 20.0, 0.1, 3.0)
     val scentRadius = p("food.scentRadius", "Scent radius (units)", "Food", 0.0, 60.0, 0.5, 12.0)
     val scentTurnRate = p("food.scentTurnRate", "Steering toward scent of food (rad/s)", "Food", 0.0, 30.0, 0.1, 8.0)
@@ -77,16 +100,23 @@ class ColonyParams(val params: Params) {
     /** The crowded area around the nest: ants don't steer by pheromone inside it, and the detector ignores it. */
     val hubRadius = p("nest.hubRadius", "Hub radius (units)", "Nest", 2.0, 60.0, 0.5, 12.0)
     val initialAnts = p("nest.initialAnts", "Ants at start (on reset)", "Nest", 0.0, 100_000.0, 100.0, 3000.0)
-    val initialStore = p("nest.initialStore", "Store at start (on reset)", "Nest", 0.0, 100_000.0, 10.0, 500.0)
+    val initialStore = p("nest.initialStore", "Store at start (on reset)", "Nest", 0.0, 100_000.0, 10.0, 2000.0)
+    /** Food per new ant. Newborns hatch full (an egg is cheaper than a meal, so this is below mealSize). */
     val hatchCost = p("nest.hatchCost", "Food per new ant", "Nest", 0.0, 50.0, 0.05, 0.5)
+    /** The store the nest keeps back before hatching: this many seconds of what the colony is eating. */
+    val reserveTime = p("nest.reserveTime", "Reserve kept (s of eating)", "Nest", 0.0, 600.0, 1.0, 30.0)
+    /** Surplus beyond the reserve is turned into ants over about this long (a rate, not a cap). */
+    val hatchTime = p("nest.hatchTime", "Time to hatch the surplus (s)", "Nest", 0.1, 600.0, 0.1, 20.0)
+    /** Time constant of the running average of how fast the colony eats. */
+    val eatingAverage = p("nest.eatingAverage", "Eating-rate averaging (s)", "Nest", 1.0, 600.0, 1.0, 30.0)
     /**
-     * The queen's egg-laying limit. Food delivery grows with the population, so without a cap on
-     * hatching a well-fed colony would grow without bound; with it, a fed colony settles near
-     * maxHatchRate × lifespan (100 × 150 = 15,000 by default).
+     * Non-zero holds the population at exactly this many ants, topping up and culling regardless
+     * of food (births from surplus stop; ants still eat and starve, and are replaced). Used for
+     * the comparison baseline, so both runs have the same number of ants.
      */
-    val maxHatchRate = p("nest.maxHatchRate", "Max hatch rate (ants/s)", "Nest", 0.0, 2000.0, 1.0, 100.0)
-    val storeCap = p("nest.storeCap", "Store capacity", "Nest", 0.0, 1_000_000.0, 100.0, 3000.0)
+    val fixedPopulation = p("nest.fixedPopulation", "Fixed population (0 = off)", "Nest", 0.0, 100_000.0, 100.0, 0.0)
     val populationFloor = p("nest.populationFloor", "Population floor", "Nest", 0.0, 5000.0, 10.0, 300.0)
+    /** A safety limit for the renderer only; ordinary feeding never comes near it. */
     val populationCap = p("nest.populationCap", "Population cap", "Nest", 100.0, 100_000.0, 100.0, 100_000.0)
 
     // ---- Mound ----
