@@ -27,6 +27,14 @@ class TrailParams(params: Params) {
         "trails.costFloor", "Cost floor (bare ground costs 1 + 1/floor)", GROUP,
         min = 0.005, max = 1.0, step = 0.005, default = 0.05,
     )
+    private val ridgeBlur = params.declare(
+        "trails.ridgeBlur", "Blur before costing (world units)", GROUP,
+        min = 0.0, max = 8.0, step = 0.25, default = 2.0,
+    )
+    private val mergeTolerance = params.declare(
+        "trails.mergeTolerance", "Merge onto a nearby route within (share of cost)", GROUP,
+        min = 0.0, max = 0.2, step = 0.005, default = 0.05,
+    )
     private val routeDiscount = params.declare(
         "trails.routeDiscount", "Discount on last time's routes", GROUP,
         min = 0.0, max = 0.9, step = 0.05, default = 0.2,
@@ -53,6 +61,8 @@ class TrailParams(params: Params) {
         keepRatio = keepRatio.value,
         maxGap = maxGap.value,
         costFloor = costFloor.value,
+        ridgeBlur = ridgeBlur.value,
+        mergeTolerance = mergeTolerance.value,
         routeDiscount = routeDiscount.value,
         pileRadius = pileRadius.value,
         smoothing = smoothing.value,
@@ -74,6 +84,20 @@ data class TrailConfig(
     val maxGap: Double,
     /** A cell costs `(1 + floor) / (strength + floor)` per world unit: 1 at full strength. */
     val costFloor: Double,
+    /**
+     * Standard deviation, in world units, of a Gaussian blur applied to the strengths before they
+     * become costs. A trail several cells wide is a plateau with many equally cheap parallel lanes,
+     * so two voices could run side by side down one trail without sharing a single cell. Blurring
+     * turns the plateau into a ridge along the trail's middle, which every route then follows, so
+     * voices on the same trail share their trunk. It also evens out speckle noise. Acceptance and
+     * point strengths still use the unblurred values.
+     */
+    val ridgeBlur: Double,
+    /**
+     * A route tracing back that passes right beside an already traced one steps onto it if that
+     * costs at most this share more than its own way (see [RouteTracer]).
+     */
+    val mergeTolerance: Double,
     /** Cells on last call's voices cost this share less. */
     val routeDiscount: Double,
     /** How far from a pile's center a route may end. */

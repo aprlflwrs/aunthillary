@@ -86,7 +86,7 @@ internal object DebugImages {
     private fun routes(f: Frame): BufferedImage {
         val img = dimmed(f)
         val p = Painter(img, f)
-        for (r in f.routes) for (c in r.cells) p.cell(c, if (r.accepted) 0x30e030 else 0xe03030)
+        for (r in f.routes) for (c in r.cells) p.cellDot(c, if (r.accepted) 0x30e030 else 0xe03030)
         for (pile in f.piles) p.dot(pile.x, pile.y, 0xffe000)
         for (pile in f.ghosts) p.dot(pile.x, pile.y, 0xff40ff)
         return img
@@ -146,6 +146,9 @@ internal object DebugImages {
             val py = (f.size - 1 - j) * s
             for (dy in 0 until s) for (dx in 0 until s) img.setRGB(i * s + dx, py + dy, rgb)
         }
+
+        /** A cell drawn with a one-pixel border, so thin routes stand out at full resolution. */
+        fun cellDot(c: Int, rgb: Int) = dot((c % f.size + 0.5) * f.cell, (c / f.size + 0.5) * f.cell, rgb, radius = 1)
 
         private fun px(x: Double) = (x * pixelsPerUnit).toInt()
         private fun py(y: Double) = img.height - 1 - (y * pixelsPerUnit).toInt()

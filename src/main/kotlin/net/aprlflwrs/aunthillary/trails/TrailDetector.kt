@@ -58,8 +58,11 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
 
     private val living = ArrayList<LiveVoice>()
 
-    /** Piles that have left the input but still have a voice, by food id, at their last position. */
-    private val ghosts = TreeMap<Int, FoodPile>()
+    /**
+     * The pile of every living voice, by food id, at its last known position. Those missing from
+     * the latest input are the ghosts: invisible targets kept until their voice fades.
+     */
+    private val voicedPiles = TreeMap<Int, FoodPile>()
     private var nextVoiceId = 1
 
     /** Cells on the routes of the voices returned last call; they get the route discount. */
@@ -68,6 +71,8 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
     // Buffers reused between calls of the same grid size.
     private var search: PathSearch? = null
     private var strength = FloatArray(0)
+    private var ridge = FloatArray(0)
+    private var scratch = FloatArray(0)
     private var cost = DoubleArray(0)
     private var impassable = BooleanArray(0)
     private var hub = BooleanArray(0)
@@ -83,7 +88,7 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
     /** Forgets every voice, ghost and route, for a colony reset or flood. Ids restart at 1. */
     fun reset() {
         living.clear()
-        ghosts.clear()
+        voicedPiles.clear()
         nextVoiceId = 1
         previousRoutes = null
     }
@@ -105,14 +110,15 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
         markImpassable(input)
         val sources = markHub(input)
 
-        // Step 3: cost field and the search.
+        // Step 3: cost field (from the blurred ridge) and the search.
+        Blur.gaussian(strength, ridge, scratch, size, cfg.ridgeBlur / cell)
         val discountMask = previousRoutes
         val keepShare = 1.0 - cfg.routeDiscount
         for (i in 0 until n) {
             cost[i] = if (impassable[i] || hub[i]) {
                 Double.POSITIVE_INFINITY
             } else {
-                val c = (1.0 + cfg.costFloor) / (strength[i] + cfg.costFloor)
+                val c = (1.0 + cfg.costFloor) / (ridge[i] + cfg.costFloor)
                 if (discountMask != null && discountMask[i]) c * keepShare else c
             }
         }
@@ -124,10 +130,15 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
         // Step 4: routes. Targets are the live piles plus the ghosts of living voices, by food id.
         val livePiles = TreeMap<Int, FoodPile>()
         for (p in input.piles) livePiles[p.id] = p
-        val targets = TreeMap<Int, FoodPile>(ghosts)
+        val targets = TreeMap<Int, FoodPile>(voicedPiles)
         targets.putAll(livePiles)
         val routes = TreeMap<Int, IntArray>()
-        for ((id, pile) in targets) routes[id] = traceRoute(pile, input, cfg) ?: continue
+        // Living voices are traced first (in slot order), so a newcomer merges onto an existing
+        // voice's lane rather than the other way round.
+        val traceOrder = living.map { it.foodId }.filter { it in targets } +
+            targets.keys.filter { id -> living.none { it.foodId == id } }
+        val tracer = RouteTracer(size, cell, search.dist, search.parent, strength, cost, cfg)
+        for (id in traceOrder) routes[id] = tracer.trace(targets.getValue(id)) ?: continue
 
         val newBar = cfg.threshold
         val keepBar = cfg.threshold * cfg.keepRatio
@@ -169,9 +180,10 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
         }
         living.sortBy { it.slot }
 
-        // Ghosts: every living voice whose pile has left the input, at its last known position.
-        ghosts.clear()
-        for (v in living) if (v.foodId !in livePiles) ghosts[v.foodId] = targets.getValue(v.foodId)
+        // Remember every living voice's pile; a dead voice's ghost is dropped here.
+        voicedPiles.clear()
+        for (v in living) voicedPiles[v.foodId] = targets.getValue(v.foodId)
+        val ghosts = voicedPiles.filterKeys { it !in livePiles }.values.toList()
 
         // Step 6: curves.
         val voices = living.map { v ->
@@ -194,7 +206,7 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
                     threshold = newBar, dist = search.dist,
                     routes = routes.map { (id, r) -> DebugImages.Route(id, r, accepted[id] == true) },
                     voices = voices,
-                    piles = input.piles, ghosts = ghosts.values.toList(),
+                    piles = input.piles, ghosts = ghosts,
                 ),
             )
         }
@@ -210,6 +222,8 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
         if (search?.size == size) return
         search = PathSearch(size)
         strength = FloatArray(n)
+        ridge = FloatArray(n)
+        scratch = FloatArray(n)
         cost = DoubleArray(n)
         impassable = BooleanArray(n)
         hub = BooleanArray(n)
@@ -259,39 +273,6 @@ class TrailDetector(params: Params, var debugDir: File? = null) {
             if (touches) sources += c
         }
         return sources.toIntArray()
-    }
-
-    /**
-     * The route to [pile], hub end first, or null if nothing near the pile was reached. It ends at
-     * the strongest reached cell within the pile's reach (ties: cheaper, then lower index), since
-     * the pile's own cell may be blocked or bare while the trail runs right beside it.
-     */
-    private fun traceRoute(pile: FoodPile, input: DetectorInput, cfg: TrailConfig): IntArray? {
-        val size = input.size
-        val cell = input.cell
-        val dist = search!!.dist
-        val parent = search!!.parent
-        // At least the pile's own cell and its neighbors, whatever the radius.
-        val reach = maxOf(cfg.pileRadius, cell * 1.5)
-        val i0 = ((pile.x - reach) / cell).toInt().coerceIn(0, size - 1)
-        val i1 = ((pile.x + reach) / cell).toInt().coerceIn(0, size - 1)
-        val j0 = ((pile.y - reach) / cell).toInt().coerceIn(0, size - 1)
-        val j1 = ((pile.y + reach) / cell).toInt().coerceIn(0, size - 1)
-        var best = -1
-        for (j in j0..j1) for (i in i0..i1) {
-            val c = j * size + i
-            if (dist[c].isInfinite()) continue
-            if (hypot((i + 0.5) * cell - pile.x, (j + 0.5) * cell - pile.y) > reach) continue
-            if (best < 0 || strength[c] > strength[best] ||
-                (strength[c] == strength[best] && dist[c] < dist[best])
-            ) best = c
-        }
-        if (best < 0) return null
-        val chain = ArrayList<Int>()
-        var c = best
-        while (c >= 0) { chain += c; c = parent[c] }
-        chain.reverse()
-        return chain.toIntArray()
     }
 
     /**
