@@ -47,3 +47,17 @@ val jsTest = tasks.register<Exec>("jsTest") {
     onlyIf("Node is installed") { nodeExecutable != null }
 }
 tasks.check { dependsOn(jsTest) }
+
+// The headless runner (src/main/kotlin/.../Headless.kt): runs the colony without a browser, as
+// fast as the CPU allows, and writes pheromone images and a metrics CSV. Not part of check.
+//   ./gradlew runHeadless --args="--seed 1 --duration 600 --food 400,300 --food 160,380"
+//   ./gradlew runHeadless --args="--lesion"
+//   ./gradlew runHeadless --args="--help"
+tasks.register<JavaExec>("runHeadless") {
+    group = "application"
+    description = "Runs the colony without a browser and writes pheromone images and metrics."
+    mainClass = "net.aprlflwrs.aunthillary.HeadlessKt"
+    classpath = sourceSets.main.get().runtimeClasspath
+    workingDir = projectDir
+    jvmArgs("-Djava.awt.headless=true")
+}
