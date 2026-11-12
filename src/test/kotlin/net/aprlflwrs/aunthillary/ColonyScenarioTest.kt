@@ -117,6 +117,7 @@ class ColonyScenarioTest {
     fun `the population settles in the target range while the colony is fed`() {
         // A fed colony settles about one lifespan after food starts coming in, so the window runs from
         // one and a half lifespans in (225 s) until the last pile runs out.
+        run // runs the scenario (and sets colony) if no other test has yet
         val settled = 1.5 * colony.p.lifespan.value
         val window = run.filter { it.seconds >= settled && it.seconds <= maxOf(emptiedAt(0), emptiedAt(1)) }
         assertTrue(window.size >= 60)

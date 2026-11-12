@@ -146,10 +146,10 @@ data class HeadlessOptions(
         val actions = mutableListOf<LoggedAction>()
         val settings = set.toMutableList()
         profileAnts?.let { n ->
-            // No births and no deaths: the population stays at n for the whole run.
+            // No births and no deaths: the population stays at n for the whole run, and the piles never run out.
             settings += listOf("nest.initialAnts" to n.toDouble(), "nest.populationCap" to 100_000.0,
                 "nest.maxHatchRate" to 0.0, "ants.lifespan" to 100_000.0, "ants.lifespanJitter" to 0.0,
-                "nest.populationFloor" to 0.0)
+                "nest.populationFloor" to 0.0, "food.pileAmount" to 500_000.0)
         }
         for ((k, v) in settings) actions += LoggedAction(0, Action.SetParam(k, v))
         if (settings.isNotEmpty()) actions += LoggedAction(0, Action.Reset)
