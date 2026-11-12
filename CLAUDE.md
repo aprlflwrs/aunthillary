@@ -7,11 +7,13 @@
 - `./gradlew check`: Kotlin tests, then the JavaScript tests under Node (skipped if Node is missing)
 - `./gradlew run`: start the server at http://localhost:8080
 - `./gradlew buildFatJar`: build `build/libs/aunthillary.jar` (run it with `java -jar build/libs/aunthillary.jar`)
+- `./gradlew runHeadless --args="--help"`: run the colony without a browser (metrics CSV, pheromone images, replays, the lesion test)
 
 ## Where things are
 
-- `src/main/kotlin/net/aprlflwrs/aunthillary/core/`: the colony. `Colony.kt` is the interface the server drives (the fake colony implements it now, the real one in Phase 1); `Params.kt` is the params registry; `World.kt` holds the world size and tick length.
-- `.../trails/`: the trail detector (Phase 1).
+- `src/main/kotlin/net/aprlflwrs/aunthillary/core/`: the colony. `Colony.kt` is the interface the server drives; `AntColony.kt` is the real colony (`ColonyParams.kt` lists its parameters), and `server/FakeColony.kt` a stand-in; `Params.kt` is the params registry; `World.kt` holds the world size and tick length.
+- `.../trails/`: the trail detector. `TrailDetector.detect(DetectorInput)` turns a pheromone snapshot into voices.
+- `Headless.kt`: the headless runner.
 - `.../server/`: `Server.kt` (Ktor module, named in `application.yaml`), `TickLoop.kt` (owns the colony; the only code that touches it), `Outbox.kt` (one latest-value slot per message type), `Protocol.kt` (every message encoder), `FakeColony.kt`.
 - `src/main/resources/static/`: the browser client. `net/protocol.js` decodes what `Protocol.kt` encodes; `ui/tuning.js` builds the panel from the params message; `debug/view2d.js` is a throwaway 2D view until the Three.js renderer exists; `vendor/` holds pinned libraries (see `vendor/VERSIONS.txt`).
 - Tests: `src/test/kotlin/` checks every message byte for byte against the plan and writes the bytes to `build/protocol-fixtures/`; `src/test/js/` decodes those same bytes with the browser decoder.
