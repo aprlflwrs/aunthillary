@@ -37,8 +37,8 @@ export function createAnts() {
   // Its origin is near the middle of the body, so it turns about its centre.
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute([
-    0.6, 0, 0,     -0.45, 0, -0.32,   -0.2, 0, 0,     // right half (south side when facing east)
-    0.6, 0, 0,     -0.2, 0, 0,        -0.45, 0, 0.32, // left half
+    0.6, 0, 0,     -0.45, 0, -0.32,   -0.2, 0, 0,     // left half (north side when facing east)
+    0.6, 0, 0,     -0.2, 0, 0,        -0.45, 0, 0.32, // right half
   ], 3));
 
   // The material's colour is white, so each ant shows exactly its instance colour. It is

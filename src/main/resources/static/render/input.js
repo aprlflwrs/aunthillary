@@ -4,9 +4,11 @@
 //
 // Zoom and pan change the camera state through cameraRig.js. A click is turned into a world
 // point by casting a ray from the active camera through the cursor and intersecting it with
-// the ground plane (Y = 0). That ignores the terrain's few units of height, which is a
-// fraction of a world unit of error in the top-down view. Intersecting the 100,000-instance
-// ant mesh (raycaster.intersectObjects(scene)) is deliberately avoided.
+// the ground plane (Y = 0). In the top-down view the ray is vertical, so this is exact. In the
+// tilted view it ignores the terrain's height: the food lands about height × tan(tilt angle)
+// further north than the hill under the cursor (several world units on a tall mound at full
+// tilt). Intersecting the 100,000-instance ant mesh (raycaster.intersectObjects(scene)) is
+// deliberately avoided.
 
 import * as THREE from 'three';
 import { zoomAt, panBy } from './cameraRig.js';
