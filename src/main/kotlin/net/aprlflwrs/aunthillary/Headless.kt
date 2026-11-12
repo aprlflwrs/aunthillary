@@ -23,11 +23,14 @@ import kotlin.system.exitProcess
  *
  *  - **run** (the default): one colony, from a seed and a script of actions (`--food`, `--set`,
  *    or a whole recorded `--replay` log).
+ *  - **baseline**: the comparison from the plan's Timeline & Risks. The same script twice at
+ *    the same fixed population, once as the colony and once with trail-following off, with
+ *    both runs' metrics written side by side.
  *  - **lesion**: the lesion test from the plan. A colony learns where food is, the food is
  *    taken away, and after the trail has faded new food is placed in the same direction.
- *    The run is done twice from the same seed, identical up to that moment; in the second the
- *    heading distribution is flattened just before the new food appears. No ant differs
- *    between the two; any difference in how fast the colony finds the new food is the symbol's.
+ *    The run is done twice from the same seed, identical up to the removal; in the second the
+ *    heading distribution is flattened at that moment. No ant differs between the two then;
+ *    any difference in how fast the colony brings the new food home is the symbol's.
  *
  * Run it with `./gradlew runHeadless --args="..."`.
  */
@@ -40,7 +43,11 @@ fun main(args: Array<String>) {
         exitProcess(2)
     }
     if (options.help) { println(usage); return }
-    if (options.lesion) Lesion(options).run() else HeadlessRun(options).run()
+    when {
+        options.lesion -> Lesion(options).run()
+        options.baseline != null -> Baseline(options).run()
+        else -> HeadlessRun(options).run()
+    }
 }
 
 private val usage = """
@@ -55,15 +62,20 @@ private val usage = """
       --csv-every S        seconds between metrics rows (default 1)
       --png-every S        seconds between pheromone images, 0 for none (default 30)
       --link-threshold D   food density counted as trail when testing links (default ${TRAIL_THRESHOLD})
-      --profile N          hold the population at N ants (no births or deaths) to profile the tick
+      --profile N          hold the population at N ants (fixed-population mode) to profile the tick
+      --swing-window S     seconds of history behind the population swing columns (default 900)
+      --baseline N         run the script twice at a fixed population of N, as the colony and with
+                           trail-following off; writes DIR/colony and DIR/baseline
       --lesion             run the lesion test instead (options below)
       --seeds A,B,...      lesion: seeds to run (default 1,2,3)
-      --lesion-build S     lesion: seconds with food before it is removed (default 240)
-      --lesion-wait S      lesion: seconds after removal before new food appears (default 150)
-      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 300)
+      --lesion-build S     lesion: seconds with food before it is removed (default 300)
+      --lesion-wait S      lesion: seconds after removal before new food appears (default 120)
+      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 100)
       --lesion-timeout S   lesion: give up measuring after this many seconds (default 300)
       --lesion-angle A     lesion: direction of the food from the nest, radians (default 0.785)
       --lesion-distance D  lesion: distance of the food from the nest (default 150)
+      --no-lesion-sustain  lesion: no second pile opposite to keep the colony fed through the wait
+      --lesion-population N  lesion: hold the population at N, 0 for the free economy (default 10000)
 """.trimIndent()
 
 /** Food pheromone density that counts as trail for the link metric (and in the tests). */
@@ -82,14 +94,18 @@ data class HeadlessOptions(
     val pngEvery: Double = 30.0,
     val linkThreshold: Double = TRAIL_THRESHOLD,
     val profileAnts: Int? = null,
+    val swingWindow: Double = 900.0,
+    val baseline: Int? = null,
     val lesion: Boolean = false,
     val seeds: List<Long> = listOf(1, 2, 3),
-    val lesionBuild: Double = 240.0,
-    val lesionWait: Double = 150.0,
-    val lesionDeliveries: Int = 300,
+    val lesionBuild: Double = 300.0,
+    val lesionWait: Double = 120.0,
+    val lesionDeliveries: Int = 100,
     val lesionTimeout: Double = 300.0,
     val lesionAngle: Double = PI / 4,
     val lesionDistance: Double = 150.0,
+    val lesionSustain: Boolean = true,
+    val lesionPopulation: Int = 10_000,
 ) {
     companion object {
         fun parse(args: Array<String>): HeadlessOptions {
@@ -124,6 +140,8 @@ data class HeadlessOptions(
                     "--png-every" -> o.copy(pngEvery = num(value()))
                     "--link-threshold" -> o.copy(linkThreshold = num(value()))
                     "--profile" -> o.copy(profileAnts = num(value()).toInt())
+                    "--swing-window" -> o.copy(swingWindow = num(value()))
+                    "--baseline" -> o.copy(baseline = num(value()).toInt())
                     "--lesion" -> o.copy(lesion = true)
                     "--seeds" -> o.copy(seeds = value().split(',').map { num(it).toLong() })
                     "--lesion-build" -> o.copy(lesionBuild = num(value()))
@@ -132,6 +150,8 @@ data class HeadlessOptions(
                     "--lesion-timeout" -> o.copy(lesionTimeout = num(value()))
                     "--lesion-angle" -> o.copy(lesionAngle = num(value()))
                     "--lesion-distance" -> o.copy(lesionDistance = num(value()))
+                    "--no-lesion-sustain" -> o.copy(lesionSustain = false)
+                    "--lesion-population" -> o.copy(lesionPopulation = num(value()).toInt())
                     else -> throw IllegalArgumentException("Unknown option $a")
                 }
                 i++
@@ -146,10 +166,9 @@ data class HeadlessOptions(
         val actions = mutableListOf<LoggedAction>()
         val settings = set.toMutableList()
         profileAnts?.let { n ->
-            // No births and no deaths: the population stays at n for the whole run, and the piles never run out.
-            settings += listOf("nest.initialAnts" to n.toDouble(), "nest.populationCap" to 100_000.0,
-                "nest.maxHatchRate" to 0.0, "ants.lifespan" to 100_000.0, "ants.lifespanJitter" to 0.0,
-                "nest.populationFloor" to 0.0, "food.pileAmount" to 500_000.0)
+            // The population stays at n for the whole run, and the piles never run out.
+            settings += listOf("nest.initialAnts" to n.toDouble(), "nest.fixedPopulation" to n.toDouble(),
+                "food.pileAmount" to 500_000.0)
         }
         for ((k, v) in settings) actions += LoggedAction(0, Action.SetParam(k, v))
         if (settings.isNotEmpty()) actions += LoggedAction(0, Action.Reset)
@@ -164,14 +183,17 @@ fun seconds(s: Double): Long = Math.round(s * World.TICKS_PER_SECOND)
 
 /** One headless run: replays the script, writing metrics and images as it goes. */
 class HeadlessRun(private val o: HeadlessOptions) {
-    fun run() {
+    /** What a finished run hands back, for the baseline comparison. */
+    class Summary(val seconds: Int, val linkedAny: Int, val linkedTwo: Int, val delivered: Long, val swing: PopulationSwing)
+
+    fun run(): Summary {
         o.out.mkdirs()
         val colony = AntColony(o.seed, gridSize = o.grid)
         val replayer = Replayer(colony, o.script())
         val steps = seconds(o.duration)
         val csvEvery = seconds(o.csvEvery).coerceAtLeast(1)
         val pngEvery = seconds(o.pngEvery)
-        val metrics = MetricsWriter(File(o.out, "metrics.csv"), o.linkThreshold)
+        val metrics = MetricsWriter(File(o.out, "metrics.csv"), o.linkThreshold, o.swingWindow)
         val started = System.nanoTime()
         metrics.write(colony)
         var stepsDone = 0L
@@ -192,17 +214,76 @@ class HeadlessRun(private val o: HeadlessOptions) {
         println("Average ms per tick: ants %.3f, pheromone %.3f, other %.3f"
             .format(Locale.ROOT, total.antsNanos / n / 1e6, total.pheromoneNanos / n / 1e6, total.otherNanos / n / 1e6))
         println("Wrote ${o.out}/metrics.csv, ${o.out}/actions.log" + if (pngEvery > 0) " and pheromone images" else "")
+        return Summary(metrics.rows, metrics.linkedAnyRows, metrics.linkedTwoRows, colony.totalDelivered, metrics.swing)
+    }
+}
+
+/**
+ * Size and period of the population's swings over a trailing window: swing is
+ * (max − min) / mean, and the period is the mean time between upward crossings of the mean
+ * (with a hysteresis of 2% of the mean, so noise doesn't count as crossings). NaN when
+ * there are fewer than two crossings in the window.
+ */
+class PopulationSwing(private val windowSeconds: Double) {
+    private val times = ArrayDeque<Double>()
+    private val pops = ArrayDeque<Int>()
+    var mean = 0.0; private set
+    var swing = 0.0; private set
+    var period = Double.NaN; private set
+
+    fun add(seconds: Double, population: Int) {
+        times.addLast(seconds); pops.addLast(population)
+        while (times.first() < seconds - windowSeconds) { times.removeFirst(); pops.removeFirst() }
+        mean = pops.average()
+        swing = if (mean > 0) (pops.max() - pops.min()) / mean else 0.0
+        val band = 0.02 * mean
+        var below = false
+        val ups = mutableListOf<Double>()
+        for (k in pops.indices) {
+            if (pops[k] < mean - band) below = true
+            else if (below && pops[k] > mean + band) { ups += times[k]; below = false }
+        }
+        period = if (ups.size >= 2) (ups.last() - ups.first()) / (ups.size - 1) else Double.NaN
+    }
+}
+
+/**
+ * The comparison baseline: the same seed and script twice, both at a fixed population of
+ * `--baseline N` ants, once as the colony and once with trail-following off. A free-running
+ * baseline starves down to the floor, so without the fixed size the comparison would be
+ * "following" against "a colony 50 times smaller".
+ */
+class Baseline(private val o: HeadlessOptions) {
+    fun run() {
+        val n = o.baseline!!.toDouble()
+        val fixed = listOf("nest.initialAnts" to n, "nest.fixedPopulation" to n)
+        val colony = HeadlessRun(o.copy(out = File(o.out, "colony"), set = o.set + fixed)).run()
+        val baseline = HeadlessRun(o.copy(out = File(o.out, "baseline"), set = o.set + fixed + ("ants.followTrails" to 0.0))).run()
+        val line = { name: String, r: HeadlessRun.Summary ->
+            "%-9s delivered %7d; at least one pile linked %5.1f%% of the time, at least two %5.1f%%"
+                .format(Locale.ROOT, name, r.delivered, 100.0 * r.linkedAny / r.seconds.coerceAtLeast(1),
+                    100.0 * r.linkedTwo / r.seconds.coerceAtLeast(1))
+        }
+        println("Comparison at a fixed population of ${n.toInt()}:")
+        println(line("colony", colony))
+        println(line("baseline", baseline))
+        println("Metrics in ${o.out}/colony/metrics.csv and ${o.out}/baseline/metrics.csv")
     }
 }
 
 /** The metrics CSV: one row per interval. Stage timings are averages over the interval. */
-class MetricsWriter(file: File, private val linkThreshold: Double) {
+class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: Double = 900.0) {
     private val w = file.bufferedWriter()
     private var last: net.aprlflwrs.aunthillary.core.StageProfile.Snapshot? = null
+    val swing = PopulationSwing(swingWindow)
+    var rows = 0; private set
+    var linkedAnyRows = 0; private set
+    var linkedTwoRows = 0; private set
 
     init {
         w.write("tick,seconds,population,store,mound,piles,food_left,delivered,empty_returns,piles_linked," +
-            "symbols,symbol_directions,food_pheromone,home_pheromone,ms_ants,ms_pheromone,ms_other\n")
+            "symbols,symbol_directions,food_pheromone,home_pheromone,ms_ants,ms_pheromone,ms_other," +
+            "hatched,starved,old_age,eating_rate,pop_mean,pop_swing,pop_period\n")
     }
 
     fun write(colony: AntColony) {
@@ -216,9 +297,14 @@ class MetricsWriter(file: File, private val linkThreshold: Double) {
         )
         val symbols = colony.symbols()
         val f = { v: Double -> "%.4f".format(Locale.ROOT, v) }
+        val seconds = colony.tick * World.DT
+        swing.add(seconds, colony.population)
+        rows++
+        if (linked.count { it } >= 1) linkedAnyRows++
+        if (linked.count { it } >= 2) linkedTwoRows++
         w.write(listOf(
             colony.tick.toString(),
-            f(colony.tick * World.DT),
+            f(seconds),
             colony.population.toString(),
             f(colony.store),
             f(colony.moundHeight),
@@ -232,6 +318,11 @@ class MetricsWriter(file: File, private val linkThreshold: Double) {
             f(TrailMetrics.total(colony.grid.food, colony.grid.size)),
             f(TrailMetrics.total(colony.grid.home, colony.grid.size)),
             f(ms[0]), f(ms[1]), f(ms[2]),
+            colony.totalHatched.toString(),
+            colony.totalStarved.toString(),
+            (colony.totalDied - colony.totalStarved).toString(),
+            f(colony.eatingRate),
+            f(swing.mean), f(swing.swing), if (swing.period.isNaN()) "" else f(swing.period),
         ).joinToString(",") + "\n")
     }
 
@@ -294,6 +385,12 @@ private fun rgb(r: Double, g: Double, b: Double): Int {
  * only change ants born after that moment, which mostly haven't left the nest by the time the
  * food is found. So what is tested is the lingering peak during the wait, the colony's
  * "belief in food that is no longer there".
+ *
+ * By default the population is held fixed (`--lesion-population`, 10,000). Under the free
+ * hunger economy, removing a pile puts the colony in deficit, births stop until it has starved
+ * down to the new balance, and with no newborns the distribution has nothing to act through:
+ * the two runs then stay identical. At a fixed size, every ant that dies (of hunger or age) is
+ * replaced by a newborn whose heading comes from the distribution.
  */
 class Lesion(private val o: HeadlessOptions) {
     private class Run(
@@ -313,27 +410,31 @@ class Lesion(private val o: HeadlessOptions) {
             .format(Locale.ROOT, px, py, o.lesionBuild, o.lesionWait, o.lesionDeliveries, 1.0 / HeadingDistribution.BINS))
         val csv = File(o.out, "lesion.csv").printWriter()
         csv.println("seed,identical_at_lesion,share_intact,share_flattened,symbol_intact,symbol_flattened," +
-            "old_trail_linked,seconds_intact,seconds_flattened")
-        val pairs = mutableListOf<Pair<Double, Double>>()
+            "old_trail_linked_intact,old_trail_linked_flattened,seconds_intact,seconds_flattened")
+        val pairs = mutableListOf<Triple<Double, Double, Boolean>>()
         for (seed in o.seeds) {
             val a = runOnce(seed, px, py, flatten = false)
             val b = runOnce(seed, px, py, flatten = true)
             val identical = a.fingerprintAtLesion == b.fingerprintAtLesion
             println(("  seed %d: found in %s s intact, %s s flattened. At the new food: share toward it %.4f intact, " +
-                "%.4f flattened; symbol strength %.2f intact, %.2f flattened; old trail %s; identical at the lesion: %s")
+                "%.4f flattened; symbol strength %.2f intact, %.2f flattened; old trail %s intact, %s flattened; identical at the lesion: %s")
                 .format(Locale.ROOT, seed, fmt(a.time), fmt(b.time), a.shareAtPlacement, b.shareAtPlacement,
-                    a.symbolAtPlacement, b.symbolAtPlacement, if (a.oldTrailLinked) "STILL LINKED" else "gone", identical))
+                    a.symbolAtPlacement, b.symbolAtPlacement, trail(a.oldTrailLinked), trail(b.oldTrailLinked), identical))
             csv.println(listOf(seed, identical, "%.4f".format(Locale.ROOT, a.shareAtPlacement),
                 "%.4f".format(Locale.ROOT, b.shareAtPlacement), "%.3f".format(Locale.ROOT, a.symbolAtPlacement),
-                "%.3f".format(Locale.ROOT, b.symbolAtPlacement), a.oldTrailLinked, a.time ?: "", b.time ?: "").joinToString(","))
-            if (a.time != null && b.time != null) pairs += a.time to b.time
+                "%.3f".format(Locale.ROOT, b.symbolAtPlacement), a.oldTrailLinked, b.oldTrailLinked, a.time ?: "", b.time ?: "").joinToString(","))
+            if (a.time != null && b.time != null) pairs += Triple(a.time, b.time, !a.oldTrailLinked && !b.oldTrailLinked)
         }
         csv.close()
-        if (pairs.isNotEmpty()) {
-            println("Mean time to find: %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds."
-                .format(Locale.ROOT, pairs.sumOf { it.first } / pairs.size, pairs.sumOf { it.second } / pairs.size,
-                    pairs.count { it.first < it.second }, pairs.size))
+        fun summary(label: String, ps: List<Triple<Double, Double, Boolean>>) {
+            if (ps.isEmpty()) return
+            println("%s: mean time to find %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds."
+                .format(Locale.ROOT, label, ps.sumOf { it.first } / ps.size, ps.sumOf { it.second } / ps.size,
+                    ps.count { it.first < it.second }, ps.size))
         }
+        summary("All seeds", pairs)
+        // A seed where the old trail outlived the wait measures the pheromone, not the symbol.
+        summary("Seeds whose old trail had faded in both runs", pairs.filter { it.third })
         println("Wrote ${o.out}/lesion.csv and each run's action log")
     }
 
@@ -341,12 +442,22 @@ class Lesion(private val o: HeadlessOptions) {
         val colony = AntColony(seed, gridSize = o.grid)
         // The script both runs share, so they stay bit-identical until the lesion.
         val script = mutableListOf<LoggedAction>()
-        for ((k, v) in o.set) script += LoggedAction(0, Action.SetParam(k, v))
-        if (o.set.isNotEmpty()) script += LoggedAction(0, Action.Reset)
+        val settings = o.set.toMutableList()
+        if (o.lesionPopulation > 0) {
+            val n = o.lesionPopulation.toDouble()
+            settings += listOf("nest.initialAnts" to n, "nest.fixedPopulation" to n)
+        }
+        for ((k, v) in settings) script += LoggedAction(0, Action.SetParam(k, v))
+        if (settings.isNotEmpty()) script += LoggedAction(0, Action.Reset)
         script += LoggedAction(0, Action.PlaceFood(px, py))
+        if (o.lesionSustain) {
+            // A second pile opposite, so the colony stays fed (and doesn't starve to its floor) while the
+            // lesion pile is gone. It is placed after the lesion pile, so the lesion pile is pile 1.
+            script += LoggedAction(0, Action.PlaceFood(World.SIZE - px, World.SIZE - py))
+        }
         val removeTick = seconds(o.lesionBuild)
         Replayer(colony, script).run(removeTick)
-        check(colony.piles.isNotEmpty()) { "Food at ($px, $py) could not be placed (rock?) for seed $seed" }
+        check(colony.piles.firstOrNull()?.let { it.x == px && it.y == py } == true) { "Food at ($px, $py) could not be placed (rock?) for seed $seed" }
 
         val fingerprint = colony.fingerprint()
         if (flatten) colony.flattenHeadings()
@@ -370,6 +481,8 @@ class Lesion(private val o: HeadlessOptions) {
         val time = if (pile.delivered >= o.lesionDeliveries) t * World.DT else null
         return Run(fingerprint, share, symbol, linked, time)
     }
+
+    private fun trail(linked: Boolean) = if (linked) "STILL LINKED" else "gone"
 
     private fun fmt(v: Double?) = v?.let { "%.1f".format(Locale.ROOT, it) } ?: "never"
 }

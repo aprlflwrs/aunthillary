@@ -29,6 +29,8 @@ class Ants(capacity: Int = 1024) {
     var tripTime = FloatArray(capacity); private set
     /** exp(−tripTime / fade): how much pheromone the ant lays now. Kept multiplicatively. */
     var strength = FloatArray(capacity); private set
+    /** 1 = full, 0 = starved. Falls as the ant walks and lives; refilled at the nest. */
+    var energy = FloatArray(capacity); private set
     var age = FloatArray(capacity); private set
     var lifespan = FloatArray(capacity); private set
     /**
@@ -55,7 +57,7 @@ class Ants(capacity: Int = 1024) {
         if (i != last) {
             x[i] = x[last]; y[i] = y[last]; heading[i] = heading[last]; flags[i] = flags[last]
             prefCos[i] = prefCos[last]; prefSin[i] = prefSin[last]; fidelity[i] = fidelity[last]
-            tripTime[i] = tripTime[last]; strength[i] = strength[last]
+            tripTime[i] = tripTime[last]; strength[i] = strength[last]; energy[i] = energy[last]
             age[i] = age[last]; lifespan[i] = lifespan[last]
             eventAngle[i] = eventAngle[last]; pile[i] = pile[last]
         }
@@ -65,7 +67,7 @@ class Ants(capacity: Int = 1024) {
     private fun grow(n: Int) {
         x = x.copyOf(n); y = y.copyOf(n); heading = heading.copyOf(n); flags = flags.copyOf(n)
         prefCos = prefCos.copyOf(n); prefSin = prefSin.copyOf(n); fidelity = fidelity.copyOf(n)
-        tripTime = tripTime.copyOf(n); strength = strength.copyOf(n)
+        tripTime = tripTime.copyOf(n); strength = strength.copyOf(n); energy = energy.copyOf(n)
         age = age.copyOf(n); lifespan = lifespan.copyOf(n)
         eventAngle = eventAngle.copyOf(n); pile = pile.copyOf(n)
     }

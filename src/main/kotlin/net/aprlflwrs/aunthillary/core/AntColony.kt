@@ -9,18 +9,36 @@ import kotlin.random.Random
  *
  * One tick ([step]), in order:
  *  1. Pick up any parameter changes the server made directly, and log them.
- *  2. **Ants** (oldest index last, swap-removing the dead): each ant ages, moves one step
- *     along its heading (slower on slopes, never into a blocked cell), then reacts where it
- *     lands: a searcher picks up food, homes in on a nearby pile's scent, or steers by food
- *     pheromone, and gives up after a while; a returning ant steers by home pheromone and a
- *     weak pull toward the nest, and delivers its load (or its empty-handed report) on arrival.
- *     Then a random turn, and the ant lays pheromone: home pheromone while searching, food
- *     pheromone while carrying, fading with the time since its trip began.
+ *  2. **Ants** (oldest index last, swap-removing the dead): each ant ages (dying of old age
+ *     past its lifespan), moves one step along its heading (slower on slopes, never into a
+ *     blocked cell), then reacts where it lands: a searcher picks up food (if the pile has
+ *     yield left this tick; otherwise it stands and waits), homes in on a nearby pile's scent,
+ *     or steers by food pheromone, and gives up after a while; a returning ant steers by home
+ *     pheromone and a weak pull toward the nest, and on arrival delivers its load (or its
+ *     empty-handed report) and eats from the store. Then a random turn, the ant burns energy
+ *     for the distance it walked and the time that passed (dying of starvation at zero), and
+ *     it lays pheromone: home pheromone while searching, food pheromone while carrying,
+ *     fading with the time since its trip began.
  *  3. **Pheromone**: both layers evaporate and diffuse.
- *  4. **Everything else**: the nest hatches newborns from its store (heading drawn from the
- *     heading distribution), tops the population up to its floor, the distribution fades,
- *     the mound's terrain is rebuilt once a second if it grew, and twice a second the symbol
- *     tracker reads the distribution.
+ *  4. **Everything else**: the nest hatches newborns from the store's surplus over its
+ *     reserve (heading drawn from the heading distribution), or, in fixed-population mode,
+ *     tops up and culls to the fixed size; it tops the population up to its floor; the
+ *     distribution fades; the mound's terrain is rebuilt once a second if it grew; and twice
+ *     a second the symbol tracker reads the distribution.
+ *
+ * The economy (see "Nest and food economy" in the plan). Energy E runs from 1 to 0:
+ *
+ *     dE = −(distance walked) / range − dt / fastingTime
+ *
+ * At the nest an ant eats min((1 − E) · mealSize, store) and E rises accordingly; at E = 0 it
+ * starves. Deliveries are limited per pile to `pileYield` units per second, which is what
+ * lets the population settle: once the piles are worked at that rate, more ants only eat
+ * more. The nest keeps a reserve of `reserveTime` seconds of what the colony has been eating
+ * (a running average) and hatches from the surplus above it at the rate
+ *
+ *     births per second = (store − reserve) / (hatchCost · hatchTime)
+ *
+ * so births follow surplus food and nothing else sets the colony's size.
  *
  * Determinism: all randomness comes from [rng], seeded from [seed] on every reset; every tick
  * is exactly [World.DT]; nothing runs on another thread; and every sin, cos, exp, atan2 and
@@ -60,6 +78,8 @@ class AntColony(
     private val tracker = SymbolTracker()
 
     class Pile(val id: Int, val x: Double, val y: Double, var amount: Double, val placedTick: Long) {
+        /** Units ants may still take this tick (see `food.pileYield`). */
+        internal var yieldLeft = 0.0
         /** Units carried away from the pile, and units of those that reached the nest. */
         var pickedUp = 0L
         var delivered = 0L
@@ -77,13 +97,20 @@ class AntColony(
     var moundHeight = 0.0
         private set
     private var appliedMound = 0.0
+    /** Fractional births carried over between ticks. */
     private var hatchBudget = 0.0
+    /** Running average of food eaten from the store per second. */
+    var eatingRate = 0.0
+        private set
+    private var eatenThisTick = 0.0
 
     /** Running totals since the last reset, for metrics. */
     var totalDelivered = 0L; private set
     var totalEmptyReturns = 0L; private set
     var totalHatched = 0L; private set
     var totalDied = 0L; private set
+    var totalStarved = 0L; private set
+    var totalEaten = 0.0; private set
 
     /**
      * **Phase 2 hook.** The trail detector's latest voices. The colony never reads them except
@@ -200,7 +227,9 @@ class AntColony(
         store = p.initialStore.value
         moundHeight = 0.0
         hatchBudget = 0.0
+        eatingRate = 0.0; eatenThisTick = 0.0
         totalDelivered = 0; totalEmptyReturns = 0; totalHatched = 0; totalDied = 0
+        totalStarved = 0; totalEaten = 0.0
         voices = emptyList()
         terrain.generate(
             rng, p.hillHeight.value, p.hillScale.value, p.rockCount.value.toInt(), p.rockRadius.value,
@@ -212,6 +241,11 @@ class AntColony(
             val i = hatch()
             ants.age[i] = (rng.nextDouble() * ants.lifespan[i]).toFloat()
         }
+        // Start the eating-rate average where these ants would be if they walked all the time,
+        // rather than at 0, so the whole initial store doesn't count as surplus and hatch a
+        // burst of ants that then starve.
+        val perAnt = (p.speed.value / p.range.value + 1 / p.fastingTime.value) * p.mealSize.value
+        eatingRate = ants.count * perAnt
     }
 
     private fun rebuildTerrain() {
@@ -265,6 +299,15 @@ class AntColony(
         val scent2 = p.scentRadius.value * p.scentRadius.value
         val scentTurn = p.scentTurnRate.value * dt
         val emptyWeight = p.emptyWeight.value
+        val range = p.range.value
+        val walkBurn = 1.0 / range
+        val returnSafety = p.returnSafety.value
+        val returnMargin = p.returnMargin.value
+        val timeBurn = (dt / p.fastingTime.value).toFloat()
+        val mealSize = p.mealSize.value
+        // Each pile can give up to pileYield units a second, no more than one tick's worth at a time.
+        val yieldPerTick = p.pileYield.value * dt
+        for (pile in pileList) pile.yieldLeft = minOf(pile.yieldLeft + yieldPerTick, yieldPerTick + 1)
         val foodLayer = grid.food
         val homeLayer = grid.home
         val active = pileList.filter { it.amount > 0 }
@@ -308,7 +351,16 @@ class AntColony(
             val nestD2 = toNestX * toNestX + toNestY * toNestY
 
             // 2. React to where it is.
-            if (flags and Ants.RETURNING == 0) {
+            if (flags and Ants.RETURNING == 0 &&
+                ants.energy[i] * range < returnSafety * StrictMath.sqrt(nestD2) + returnMargin
+            ) {
+                // Hungry: just enough energy left to get home, so it turns back to eat. This says
+                // nothing about the direction, so it won't count against it on arrival.
+                flags = (flags and Ants.SCOUT) or Ants.RETURNING
+                ants.eventAngle[i] = Float.NaN
+                ants.tripTime[i] = 0f
+                h += PI
+            } else if (flags and Ants.RETURNING == 0) {
                 // Searching. The scent of a nearby pile beats everything else.
                 var near: Pile? = null
                 var nearD2 = scent2
@@ -318,8 +370,15 @@ class AntColony(
                     val d2 = dx * dx + dy * dy
                     if (d2 < nearD2 && pile.amount > 0) { near = pile; nearD2 = d2 }
                 }
-                if (near != null && nearD2 < pickup2) {
+                if (near != null && nearD2 < pickup2 && near.yieldLeft < minOf(1.0, near.amount)) {
+                    // The pile is being worked as fast as it can be: wait at it, if it was
+                    // already within reach before this step, rather than walking about.
+                    val bx = near.x - x0
+                    val by = near.y - y0
+                    if (bx * bx + by * by < pickup2) { x = x0; y = y0 }
+                } else if (near != null && nearD2 < pickup2) {
                     val load = minOf(1.0, near.amount)
+                    near.yieldLeft -= load
                     near.amount -= load
                     near.pickedUp++
                     if (near.amount <= 0) { near.amount = 0.0; near.emptiedTick = tick }
@@ -357,6 +416,7 @@ class AntColony(
                     headings.record(angle, -emptyWeight)
                     totalEmptyReturns++
                 }
+                eat(i, mealSize)
                 flags = flags and Ants.SCOUT
                 ants.pile[i] = 0
                 ants.eventAngle[i] = Float.NaN
@@ -371,8 +431,22 @@ class AntColony(
                 h += nestPull * (c * toNestY - s * toNestX) / StrictMath.sqrt(nestD2) // sin(toward nest − heading)
             }
 
-            // 3. A small random turn, then lay pheromone: each layer is laid by the ants not following it.
+            // 3. A small random turn, and hunger: energy falls with distance walked and with time.
             h += (rng.nextDouble() * 2 - 1) * wanderAmp
+            val dx = x - x0
+            val dy = y - y0
+            val walked = if (dx == 0.0 && dy == 0.0) 0.0 else StrictMath.sqrt(dx * dx + dy * dy)
+            val energy = ants.energy[i] - (walked * walkBurn).toFloat() - timeBurn
+            if (energy <= 0f) {
+                ants.remove(i) // starved; any load is lost
+                totalDied++
+                totalStarved++
+                i--
+                continue
+            }
+            ants.energy[i] = energy
+
+            // 4. Lay pheromone: each layer is laid by the ants not following it.
             if (flags and Ants.RETURNING == 0) {
                 grid.deposit(homeLayer, x, y, homeDep * ants.strength[i])
             } else if (flags and Ants.CARRYING != 0) {
@@ -411,22 +485,57 @@ class AntColony(
     private fun deliver(pileId: Int) {
         totalDelivered++
         pileList.firstOrNull { it.id == pileId }?.let { it.delivered++ }
-        store = minOf(store + 1, p.storeCap.value)
+        store += 1
         moundHeight = minOf(moundHeight + p.moundGrowth.value, p.moundMax.value)
+    }
+
+    /** Ant [i] is at the nest: it eats from the store until full, or until the store is empty. */
+    private fun eat(i: Int, mealSize: Double) {
+        val want = (1.0 - ants.energy[i]) * mealSize
+        val meal = minOf(want, store)
+        if (meal <= 0) return
+        store -= meal
+        eatenThisTick += meal
+        totalEaten += meal
+        ants.energy[i] = minOf(1.0, ants.energy[i] + meal / mealSize).toFloat()
     }
 
     private fun stepNest() {
         val dt = World.DT
-        // Hatch from the store, no faster than the queen can lay. The budget never banks more
-        // than one tick's worth, so a colony that was starving doesn't burst when food returns.
-        val rate = p.maxHatchRate.value * dt
-        hatchBudget = minOf(hatchBudget + rate, rate + 1)
         val cap = p.populationCap.value.toInt()
-        val cost = p.hatchCost.value
-        while (hatchBudget >= 1 && store >= cost && ants.count < cap) {
-            hatch()
-            store -= cost
-            hatchBudget -= 1
+        val fixed = p.fixedPopulation.value.toInt()
+
+        // How fast the colony has been eating: a running average with time constant eatingAverage.
+        val k = 1 - StrictMath.exp(-dt / p.eatingAverage.value)
+        eatingRate += (eatenThisTick / dt - eatingRate) * k
+        eatenThisTick = 0.0
+
+        if (fixed > 0) {
+            // Fixed-population mode: exactly `fixed` ants, whatever the food. Newborns are free
+            // and cost the store nothing; the culled are chosen at random.
+            val target = minOf(fixed, cap)
+            while (ants.count < target) hatch()
+            while (ants.count > target) { ants.remove(rng.nextInt(ants.count)); totalDied++ }
+            hatchBudget = 0.0
+        } else {
+            // Births from surplus only: the store beyond a reserve of reserveTime seconds of eating
+            // is turned into ants over about hatchTime seconds. Newborns pay hatchCost, which
+            // includes their first full meal.
+            val cost = p.hatchCost.value
+            val reserve = eatingRate * p.reserveTime.value
+            val surplus = store - reserve
+            if (surplus > 0 && cost > 0) {
+                hatchBudget += surplus / (cost * p.hatchTime.value) * dt
+                while (hatchBudget >= 1 && store - cost >= reserve && ants.count < cap) {
+                    hatch()
+                    store -= cost
+                    hatchBudget -= 1
+                }
+                // Don't bank births through a lean spell: at most one is carried to the next tick.
+                hatchBudget = hatchBudget.coerceAtMost(1.0)
+            } else {
+                hatchBudget = 0.0
+            }
         }
         // The floor: a colony that has shrunk this far is topped up for free, so it never dies out.
         val floor = minOf(p.populationFloor.value.toInt(), cap)
@@ -458,6 +567,7 @@ class AntColony(
         ants.tripTime[i] = 0f
         ants.strength[i] = 1f
         ants.age[i] = 0f
+        ants.energy[i] = 1f
         ants.lifespan[i] = (p.lifespan.value * (1 + (rng.nextDouble() * 2 - 1) * jitter)).toFloat()
         ants.eventAngle[i] = Float.NaN
         ants.pile[i] = 0
@@ -526,12 +636,12 @@ class AntColony(
         for (i in 0 until ants.count) {
             mixF(ants.x[i]); mixF(ants.y[i]); mixF(ants.heading[i]); mix(ants.flags[i].toLong())
             mixF(ants.fidelity[i]); mixF(ants.prefCos[i]); mixF(ants.tripTime[i]); mixF(ants.strength[i])
-            mixF(ants.age[i]); mixF(ants.lifespan[i]); mixF(ants.eventAngle[i]); mix(ants.pile[i].toLong())
+            mixF(ants.age[i]); mixF(ants.lifespan[i]); mixF(ants.energy[i]); mixF(ants.eventAngle[i]); mix(ants.pile[i].toLong())
         }
         for (v in grid.food) mixF(v)
         for (v in grid.home) mixF(v)
         for (v in terrain.heights) mixF(v)
-        mixD(store); mixD(moundHeight); mixD(hatchBudget)
+        mixD(store); mixD(moundHeight); mixD(hatchBudget); mixD(eatingRate)
         for (pile in pileList) { mix(pile.id.toLong()); mixD(pile.amount); mix(pile.delivered) }
         for (w in headings.weightsCopy()) mixD(w)
         for (s in tracker.symbols) { mix(s.id.toLong()); mixD(s.direction); mixD(s.strength) }
