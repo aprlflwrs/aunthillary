@@ -37,7 +37,9 @@ class ReplayTest {
         run(10)
         c.removeFood(1)
         c.flattenHeadings()
+        c.params.set("nest.fixedPopulation", 600.0) // culls at random: the culling must replay too
         run(5)
+        c.params.set("nest.fixedPopulation", 0.0)
         c.reset()
         c.placeFood(200.0, 200.0)
         run(10)

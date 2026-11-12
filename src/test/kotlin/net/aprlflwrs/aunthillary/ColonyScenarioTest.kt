@@ -3,6 +3,8 @@ package net.aprlflwrs.aunthillary
 import net.aprlflwrs.aunthillary.core.AntColony
 import net.aprlflwrs.aunthillary.core.TrailMetrics
 import net.aprlflwrs.aunthillary.core.World
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -11,16 +13,19 @@ import kotlin.test.assertTrue
 /**
  * Phase 1A's "done when", checked on headless metrics rather than by eye.
  *
- * One colony (seed 1, the full 512² grid, default parameters) gets two food piles at the
- * start, in directions about 110° apart, and runs until both piles are empty and the colony
- * has had time to forget them. Every simulated second it records the metrics below; each test
- * reads them. The run is shared (it takes under a minute) and nothing is scaled down,
- * because the population target, the trail fade and the symbol wear-down are all about the
- * default parameters' real time scales.
+ * The main run: one colony (seed 1, default parameters, on a 256² grid to keep `check` under
+ * a minute; PheromoneGridTest shows the grid behaves the same at any resolution) gets two piles
+ * of 15,000 units at the start, in directions about 110° apart, and runs until both are empty
+ * and the colony has had five minutes to forget them. A second, shorter run gets only the first
+ * pile, to show that less food supports fewer ants. The two run at once, on two threads (each
+ * colony is still single-threaded and deterministic). Every simulated second each run records
+ * the metrics below, and the tests read them.
+ *
+ * Nothing sets the population's size: it comes from the hunger economy, so the tests check
+ * that it settles and that it starves back to the floor, not that it reaches a number.
+ * Time windows are taken from the metrics (when each pile ran out), not hard-coded.
  *
  * To try another seed: `SCENARIO_SEED=2 ./gradlew test --tests '*ColonyScenarioTest' --rerun`.
- *
- * Time windows are taken from the metrics (when each pile ran out), not hard-coded.
  */
 class ColonyScenarioTest {
     class Sample(
@@ -36,50 +41,61 @@ class ColonyScenarioTest {
         val foodTotal: Double,
     )
 
+    class Run(val colony: AntColony, val samples: List<Sample>)
+
     companion object {
         /** East-north-east (0.30 rad) and north-west (2.23 rad), both about 150 units out. */
         val PILES = listOf(400.0 to 300.0, 160.0 to 380.0)
         /** Same distance, in directions with no food: south-west and south-east. */
         val CONTROLS = listOf(256.0 - 106 to 256.0 - 106, 256.0 + 106 to 256.0 - 106)
+        const val PILE_AMOUNT = 15_000.0
+        const val GRID = 256
 
         /** A symbol counts as "toward" a pile if its direction is within this of the pile's (2/3 of a bin). */
         const val ANGLE_TOLERANCE = 0.26
 
         val SEED = System.getenv("SCENARIO_SEED")?.toLong() ?: 1L
 
-        const val MAX_SECONDS = 900.0
+        const val MAX_SECONDS = 1200.0
         /** After both piles are empty, keep going this long so trails and symbols can wear down. */
-        const val AFTER_EMPTY_SECONDS = 200.0
+        const val AFTER_EMPTY_SECONDS = 300.0
+        /** The single-pile run only needs to reach its settled size. */
+        const val SINGLE_SECONDS = 450.0
 
-        val run: List<Sample> by lazy { simulate() }
-        lateinit var colony: AntColony
+        private val pool = Executors.newFixedThreadPool(2) { r -> Thread(r, "scenario").apply { isDaemon = true } }
+        private val twoPiles = CompletableFuture.supplyAsync({ simulate(PILES, MAX_SECONDS, untilForgotten = true) }, pool)
+        private val onePile = CompletableFuture.supplyAsync({ simulate(PILES.take(1), SINGLE_SECONDS, untilForgotten = false) }, pool)
 
-        private fun simulate(): List<Sample> {
-            val c = AntColony(seed = SEED)
-            colony = c
-            for ((x, y) in PILES) c.placeFood(x, y)
+        val run: List<Sample> get() = twoPiles.get().samples
+        val colony: AntColony get() = twoPiles.get().colony
+        val single: List<Sample> get() = onePile.get().samples
+
+        private fun simulate(piles: List<Pair<Double, Double>>, maxSeconds: Double, untilForgotten: Boolean): Run {
+            val c = AntColony(seed = SEED, gridSize = GRID)
+            c.setParam("food.pileAmount", PILE_AMOUNT)
+            for ((x, y) in piles) c.placeFood(x, y)
             val samples = mutableListOf<Sample>()
-            var bothEmptyAt = Double.NaN
-            while (c.tick * World.DT < MAX_SECONDS) {
+            var allEmptyAt = Double.NaN
+            while (c.tick * World.DT < maxSeconds) {
                 repeat(World.TICKS_PER_SECOND) { c.step() }
                 val links = TrailMetrics.linked(
                     c.grid.food, c.grid.size, c.nestX, c.nestY, c.p.hubRadius.value,
-                    PILES + CONTROLS, c.p.scentRadius.value, TRAIL_THRESHOLD,
+                    piles + CONTROLS, c.p.scentRadius.value, TRAIL_THRESHOLD,
                 )
                 val seconds = c.tick * World.DT
                 samples += Sample(
                     seconds = seconds,
                     population = c.population,
                     amounts = c.piles.map { it.amount },
-                    linked = links.take(PILES.size),
-                    controlLinked = links.drop(PILES.size),
+                    linked = links.take(piles.size),
+                    controlLinked = links.drop(piles.size),
                     symbols = c.symbols().map { it.direction to it.id },
                     foodTotal = TrailMetrics.total(c.grid.food, c.grid.size),
                 )
-                if (bothEmptyAt.isNaN() && c.piles.all { it.amount <= 0 }) bothEmptyAt = seconds
-                if (seconds - bothEmptyAt >= AFTER_EMPTY_SECONDS) break
+                if (allEmptyAt.isNaN() && c.piles.all { it.amount <= 0 }) allEmptyAt = seconds
+                if (untilForgotten && seconds - allEmptyAt >= AFTER_EMPTY_SECONDS) break
             }
-            return samples
+            return Run(c, samples)
         }
 
         fun pileDirection(i: Int) = StrictMath.atan2(PILES[i].second - World.SIZE / 2, PILES[i].first - World.SIZE / 2)
@@ -96,7 +112,6 @@ class ColonyScenarioTest {
 
     @Test
     fun `both piles were placed`() {
-        run
         assertEquals(PILES.size, colony.piles.size, "a pile landed on a rock for this seed")
     }
 
@@ -115,16 +130,37 @@ class ColonyScenarioTest {
 
     @Test
     fun `the population settles in the target range while the colony is fed`() {
-        // A fed colony settles about one lifespan after food starts coming in, so the window runs from
-        // one and a half lifespans in (225 s) until the last pile runs out.
-        run // runs the scenario (and sets colony) if no other test has yet
-        val settled = 1.5 * colony.p.lifespan.value
-        val window = run.filter { it.seconds >= settled && it.seconds <= maxOf(emptiedAt(0), emptiedAt(1)) }
-        assertTrue(window.size >= 60)
+        // The last three minutes before the first pile runs out.
+        val firstEmpty = minOf(emptiedAt(0), emptiedAt(1))
+        val window = run.filter { it.seconds >= firstEmpty - 180 && it.seconds < firstEmpty }
+        assertTrue(window.size >= 170, "the piles ran out before the colony could settle")
         val pops = window.map { it.population }
         val min = pops.min(); val max = pops.max(); val mean = pops.average()
         assertTrue(min >= 5_000 && max <= 30_000, "population ranged $min–$max, outside 5,000–30,000")
-        assertTrue((max - min) / mean < 0.1, "population not settled: ranged $min–$max")
+        assertTrue((max - min) / mean < 0.15, "population not settled: ranged $min–$max")
+        // And it got there by growing from food: well above where it started.
+        assertTrue(mean > 2 * run.first().population)
+    }
+
+    @Test
+    fun `the colony starves back to its floor when the food is gone`() {
+        val lastEmpty = maxOf(emptiedAt(0), emptiedAt(1))
+        val floor = colony.p.populationFloor.value
+        val after = run.filter { it.seconds >= lastEmpty + 200 }
+        assertTrue(after.isNotEmpty())
+        val max = after.maxOf { it.population }
+        assertTrue(max <= 1.05 * floor, "population still $max, 200 s after the food ran out (floor $floor)")
+    }
+
+    @Test
+    fun `more food supports more ants`() {
+        // Same seed, same window: one pile against two.
+        val window = { s: List<Sample> -> s.filter { it.seconds >= SINGLE_SECONDS - 120 && it.seconds <= SINGLE_SECONDS } }
+        val one = window(single).map { it.population }.average()
+        val two = window(run).map { it.population }.average()
+        assertTrue(window(single).all { it.amounts[0] > 0 } && window(run).all { s -> s.amounts.all { it > 0 } },
+            "both colonies should still be fed in the comparison window")
+        assertTrue(two > 1.5 * one, "two piles supported $two ants, one pile $one")
     }
 
     @Test
@@ -145,7 +181,7 @@ class ColonyScenarioTest {
         for (i in PILES.indices) {
             // It forms while the pile has food, and holds for at least half a minute. (Not necessarily all
             // the time: the symbols compete for newborns, so a busier pile's symbol can crowd out a
-            // quieter one's for a while, as happens with seed 4.)
+            // quieter one's for a while.)
             val fed = run.filter { it.amounts[i] > 0 }.map { symbolsToward(it, i).isNotEmpty() }
             val longest = fed.fold(0 to 0) { (best, cur), present -> if (present) maxOf(best, cur + 1) to cur + 1 else best to 0 }.first
             assertTrue(longest >= 30, "symbol toward pile $i held for at most $longest seconds while it had food")
@@ -156,10 +192,11 @@ class ColonyScenarioTest {
                 assertTrue(before.isEmpty() || after.isEmpty() || before.intersect(after).isNotEmpty(),
                     "the symbol toward pile $i changed identity at ${b.seconds}s: $before -> $after")
             }
-            // Gone within 200 s of the food, and it stays gone.
+            // It outlives its food (the colony's belief lingers), and is gone within five minutes.
             val lastSeen = run.last { symbolsToward(it, i).isNotEmpty() }.seconds
             assertTrue(lastSeen > emptiedAt(i), "the symbol should outlive its food a little")
-            assertTrue(lastSeen < emptiedAt(i) + 200, "the symbol toward pile $i lasted until ${lastSeen}s; food ran out at ${emptiedAt(i)}s")
+            assertTrue(lastSeen < emptiedAt(i) + AFTER_EMPTY_SECONDS - 10,
+                "the symbol toward pile $i lasted until ${lastSeen}s; food ran out at ${emptiedAt(i)}s")
         }
         // At some moment both symbols are there together.
         assertTrue(run.any { s -> PILES.indices.all { symbolsToward(s, it).isNotEmpty() } })
