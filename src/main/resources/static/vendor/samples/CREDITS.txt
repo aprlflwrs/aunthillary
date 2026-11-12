@@ -1,0 +1,16 @@
+Instrument samples used by the sound engine (static/audio/instruments.js)
+
+fluidr3-gm/drawbar_organ/*.mp3, fluidr3-gm/reed_organ/*.mp3, fluidr3-gm/woodblock/*.mp3
+
+  Source:  "Fluid (R3) General MIDI SoundFont" (FluidR3_GM.sf2) by Frank Wen,
+           as pre-rendered MP3 notes in the MIDI.js soundfonts by Benjamin Gleitzman:
+           https://github.com/gleitz/midi-js-soundfonts, FluidR3_GM/<instrument>-mp3.js,
+           commit 044fab8e1456bfafc5776e86dfd6bb8697149aef (gh-pages, 2021-12-17).
+  Licence: Creative Commons Attribution 3.0 (CC BY 3.0), as stated by the midi-js-soundfonts
+           README for the Fluid soundfont: https://creativecommons.org/licenses/by/3.0/
+           (The FluidR3_GM.sf2 SoundFont itself is also distributed under the MIT licence,
+           for example in Debian's fluid-soundfont package.)
+  Changes: each note's MP3 was base64-decoded out of the MIDI.js file and saved as its own
+           file, byte for byte; only every third semitone from C2 to C7 (and C5, C6 of the
+           woodblock) was kept. The audio itself is not modified on disk. At runtime the
+           engine mixes each sample to mono and trims its leading silence.
