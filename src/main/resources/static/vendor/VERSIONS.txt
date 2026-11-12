@@ -2,3 +2,8 @@ three.js 0.187.0 (r187), from npm "three"
 lil-gui 0.17.0, bundled with three 0.187.0 (examples/jsm/libs)
 smplr 1.2.0, from npm "smplr" (dist/index.mjs)
 smplr ships no LICENSE file; its package.json declares MIT.
+Instrument samples (vendor/samples/, used by audio/instruments.js; full credits in vendor/samples/CREDITS.txt):
+  FluidR3_GM (Frank Wen) via gleitz/midi-js-soundfonts, commit 044fab8e1456bfafc5776e86dfd6bb8697149aef,
+  files FluidR3_GM/{drawbar_organ,reed_organ,woodblock}-mp3.js. Licence: CC BY 3.0 (per that repository's README).
+  Kept: drawbar_organ and reed_organ notes every 3 semitones C2-C7 (21 each), woodblock C5 and C6;
+  each note's MP3 extracted byte for byte. 44 files, 1,042,826 bytes. Never fetched from the internet at runtime.
