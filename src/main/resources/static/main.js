@@ -9,6 +9,7 @@ import { onLevelChange } from './ui/level.js';
 import { createRenderView } from './render/scene.js';
 import { createDebugView } from './debug/view2d.js';
 import { createSoundEngine } from './audio/engine.js';
+import { createSpatialAudio } from './render/spatialAudio.js';
 
 const status = document.getElementById('status');
 const debugCanvas = document.getElementById('debug');
@@ -79,10 +80,16 @@ const connection = connect({
 const panel = createTuningPanel(connection);
 const viewFolder = addViewFolder(panel.gui, view);
 
-// The sound engine adds its "Sound" folder through panel.gui, so presets include it. For now
-// it plays through its own AudioContext; routing each voice into a Three.js PositionalAudio at
-// its trail (engine.detachVoiceOutput / voicePosition) comes with the rest of Phase 2.
-const engine = createSoundEngine({ panel });
+// The sound engine plays through the Three.js audio listener, which follows the camera, and
+// each voice is heard from its trail (render/spatialAudio.js). It adds its "Sound" folder
+// through panel.gui, so presets include it.
+const spatial = createSpatialAudio(view);
+const engine = createSoundEngine({
+  panel,
+  audioContext: spatial.listener.context,
+  destination: spatial.listener.getInput(),
+});
+spatial.attach(engine);
 window.soundEngine = engine; // for poking at from the browser console
 
 // Audio may only start from a user gesture, so the sound waits for the Join button.

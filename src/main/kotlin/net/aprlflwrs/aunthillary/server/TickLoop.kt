@@ -1,14 +1,29 @@
 package net.aprlflwrs.aunthillary.server
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import net.aprlflwrs.aunthillary.core.AntBuffer
 import net.aprlflwrs.aunthillary.core.Colony
+import net.aprlflwrs.aunthillary.core.Voice
 import net.aprlflwrs.aunthillary.core.World
+import net.aprlflwrs.aunthillary.trails.DetectorInput
+import net.aprlflwrs.aunthillary.trails.TrailDetector
 import org.slf4j.LoggerFactory
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicReference
+
+/**
+ * The trail detector and where its voices go. [deliver] is called on the tick thread.
+ */
+class TrailHook(val detector: TrailDetector, val deliver: (List<Voice>) -> Unit)
 
 /**
  * Owns the colony. Only this loop ever touches it: browser messages wait in [actions] and are
@@ -16,8 +31,13 @@ import java.util.concurrent.CopyOnWriteArraySet
  *
  * After each tick it hands the browsers whatever is due: ants every tick, pheromone a few
  * times a second, state twice a second, and terrain and params only when they change.
+ *
+ * With a [trails] hook it also runs the trail detector every [DETECT_EVERY] ticks. The snapshot
+ * is taken here, on the tick thread, at a fixed tick; the search itself runs on another thread
+ * so a slow search never stalls a tick, and its voices are handed back at the start of a later
+ * tick. Nothing the detector produces feeds back into the colony, so this can't affect a replay.
  */
-class TickLoop(private val colony: Colony) {
+class TickLoop(private val colony: Colony, private val trails: TrailHook? = null) {
     private val log = LoggerFactory.getLogger(TickLoop::class.java)
 
     /** Browser messages waiting for the next tick. Unlimited, so a WebSocket handler never blocks. */
@@ -38,6 +58,16 @@ class TickLoop(private val colony: Colony) {
     private var sentParamsVersion = -1
     private var sentTerrainVersion = -1
     private var lastTerrainSendTick = Long.MIN_VALUE
+
+    // ---- trail detection ----
+    private val detectorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private class Detection(val generation: Int, val voices: List<Voice>)
+    private val finished = AtomicReference<Detection?>(null)
+    @Volatile private var detecting = false
+    /** Bumped by reset and flood, so a search started before them is thrown away. */
+    private var generation = 0
+    /** The generation the detector last ran in; when it changes, the detector's memory is cleared first. */
+    private var detectorGeneration = 0
 
     fun connect(outbox: Outbox) {
         outboxes.add(outbox)
@@ -60,6 +90,8 @@ class TickLoop(private val colony: Colony) {
             if (!paused || stepsRequested > 0) {
                 if (stepsRequested > 0) stepsRequested--
                 colony.step()
+                collectDetection()
+                if (trails != null && colony.tick % DETECT_EVERY == 0L) startDetection(trails)
                 publish(forceAll = false)
             } else {
                 // Paused: still pick up parameter changes so the panel stays in sync.
@@ -74,7 +106,8 @@ class TickLoop(private val colony: Colony) {
             val now = System.nanoTime()
             if (now - nextTickAt > 250_000_000L) nextTickAt = now
             val waitNanos = nextTickAt - now
-            if (waitNanos > 0) delay(waitNanos / 1_000_000) else delay(0)
+            // When behind, still give way (delay(0) would return at once without suspending).
+            if (waitNanos >= 1_000_000) delay(waitNanos / 1_000_000) else yield()
         }
     }
 
@@ -84,17 +117,58 @@ class TickLoop(private val colony: Colony) {
             when (action) {
                 is ClientMessage.PlaceFood -> colony.placeFood(action.x, action.y)
                 is ClientMessage.SetParam -> colony.params.set(action.key, action.value)
-                ClientMessage.Flood -> colony.flood()
+                ClientMessage.Flood -> { colony.flood(); forgetTrails() }
                 is ClientMessage.Control -> when (action.action) {
                     "pause" -> paused = true
                     "resume" -> paused = false
                     "step" -> stepsRequested++
-                    "reset" -> { colony.reset(); publish(forceAll = true) }
+                    "reset" -> { colony.reset(); forgetTrails(); publish(forceAll = true) }
                     "speed" -> action.value?.let { speed = it.coerceIn(0.1, 64.0) }
                     else -> log.warn("Unknown control action '{}'", action.action)
                 }
             }
         }
+    }
+
+    /** Starts a search on a snapshot of this tick, unless one is still running (then this tick is skipped). */
+    private fun startDetection(hook: TrailHook) {
+        if (detecting) return
+        val state = colony.state()
+        val displayMax = colony.params["pheromone.displayMax"]?.value ?: 1.0
+        val input = DetectorInput.of(colony.tick, colony.pheromone(), colony.terrain(), state.nest, state.food, displayMax)
+        val gen = generation
+        val clearFirst = gen != detectorGeneration
+        detectorGeneration = gen
+        detecting = true
+        detectorScope.launch {
+            try {
+                if (clearFirst) hook.detector.reset()
+                finished.set(Detection(gen, hook.detector.detect(input)))
+            } catch (e: Exception) {
+                log.error("Trail detection failed", e)
+            } finally {
+                detecting = false
+            }
+        }
+    }
+
+    /** Hands the latest finished search's voices to the colony, unless a reset or flood made them stale. */
+    private fun collectDetection() {
+        val result = finished.getAndSet(null) ?: return
+        if (result.generation == generation) trails?.deliver?.invoke(result.voices)
+    }
+
+    /** After a reset or flood: drop the voices, ignore any search in progress, and clear the detector's memory. */
+    private fun forgetTrails() {
+        if (trails == null) return
+        generation++
+        finished.set(null)
+        trails.deliver(emptyList())
+    }
+
+    /** Stops the detector's thread pool work. */
+    fun close() {
+        detectorScope.cancel()
     }
 
     private fun publish(forceAll: Boolean) {
@@ -146,5 +220,8 @@ class TickLoop(private val colony: Colony) {
 
         /** 30 / 15 = 2 state messages a second. */
         const val STATE_EVERY = 15L
+
+        /** 30 / 15 = 2 trail detections a second, on snapshots taken at these exact ticks. */
+        const val DETECT_EVERY = 15L
     }
 }

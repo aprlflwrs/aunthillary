@@ -12,6 +12,8 @@ import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.asCoroutineDispatcher
+import net.aprlflwrs.aunthillary.core.AntColony
+import net.aprlflwrs.aunthillary.trails.TrailDetector
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import java.util.concurrent.Executors
@@ -24,14 +26,22 @@ import kotlin.time.Duration.Companion.seconds
 fun Application.module() {
     val log = LoggerFactory.getLogger("aunthillary.server")
 
-    // Phase 0 runs the fake colony; Phase 2 swaps in the real one here.
+    // The real colony and its trail detector, or the fake colony (aunthillary.colony: fake), which
+    // has its own hand-made voices and needs no detector.
     val seed = environment.config.propertyOrNull("aunthillary.seed")?.getString()?.toLong() ?: 1L
-    val loop = TickLoop(FakeColony(seed))
+    val kind = environment.config.propertyOrNull("aunthillary.colony")?.getString() ?: "real"
+    val loop = if (kind == "fake") {
+        TickLoop(FakeColony(seed))
+    } else {
+        val colony = AntColony(seed)
+        TickLoop(colony, TrailHook(TrailDetector(colony.params)) { voices -> colony.voices = voices })
+    }
+    log.info("Running the {} colony, seed {}", kind, seed)
 
     // One dedicated thread owns the colony, so the simulation never shares a thread with network work.
     val colonyThread = Executors.newSingleThreadExecutor { r -> Thread(r, "colony") }.asCoroutineDispatcher()
     launch(colonyThread) { loop.run() }
-    monitor.subscribe(ApplicationStopped) { colonyThread.close() }
+    monitor.subscribe(ApplicationStopped) { loop.close(); colonyThread.close() }
 
     install(WebSockets) {
         pingPeriod = 15.seconds

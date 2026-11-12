@@ -24,7 +24,7 @@ export const MAX_TILT = (60 * Math.PI) / 180;
 export const FOV_DEGREES = 40;
 export const MIN_VIEW_HEIGHT = 6;      // about six ants tall: as close as it gets
 export const MAX_VIEW_HEIGHT = 1400;
-const ORTHO_DISTANCE = 1000;           // how far above the target the orthographic camera sits
+export const ORTHO_DISTANCE = 1000;           // how far above the target the orthographic camera sits
 
 export function createCameraState() {
   return { targetX: 0, targetZ: 0, viewHeight: WORLD_SIZE * 1.08, tilt: 0 };

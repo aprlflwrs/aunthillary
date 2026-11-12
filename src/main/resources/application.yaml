@@ -5,5 +5,8 @@ ktor:
     modules:
       - net.aprlflwrs.aunthillary.server.ServerKt.module
 aunthillary:
+  # real: the simulated colony and its trail detector. fake: hand-made trails and voices,
+  # for working on the renderer or the sound without the simulation.
+  colony: real
   # Seed for the colony's random number generator. Same seed + same action log = same run.
   seed: 1

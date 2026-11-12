@@ -97,6 +97,7 @@ export function createRenderView(canvas, { onPlaceFood = () => {} } = {}) {
   const groundY = (x, y) => (terrainFrame ? heightAt(terrainFrame.heights, terrainFrame.n, x, y) * params.relief : 0);
 
   let framesDrawn = 0;
+  const frameCallbacks = []; // run each frame after the camera is placed, before drawing
 
   function frame() {
     if (!running) return;
@@ -120,6 +121,7 @@ export function createRenderView(canvas, { onPlaceFood = () => {} } = {}) {
 
     cameraPose(camState, aspect(), pose);
     activeCamera = applyPose(pose, ortho, perspective);
+    for (const cb of frameCallbacks) cb(activeCamera);
     renderer.render(scene, activeCamera);
   }
   requestAnimationFrame(frame);
@@ -144,6 +146,10 @@ export function createRenderView(canvas, { onPlaceFood = () => {} } = {}) {
 
   return {
     params,
+    /** The three.js scene, for things that live in it without being drawn (the audio listener). */
+    scene,
+    /** Calls `cb(camera)` every frame, after the camera is placed and before the scene is drawn. */
+    onFrame(cb) { frameCallbacks.push(cb); },
     /** Call after changing `params` (the View folder does this). */
     refreshParams,
     setAnts(message) { antFrame = message; antsDirty = true; },
