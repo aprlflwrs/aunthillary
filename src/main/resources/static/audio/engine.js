@@ -122,10 +122,17 @@ export function createSoundEngine({ panel = null, audioContext = null, destinati
   applyGains(0.01);
 
   let starting = null;
+  let started = false; // true once the AudioContext has resumed
 
   const engine = {
     /** The AudioContext (shared with Three.js once Phase 2 passes the listener's context in). */
     context: ctx,
+
+    /**
+     * The master bus's input. Anything connected here gets the master volume and the
+     * compressor; positioned voices are routed back here after their panners.
+     */
+    input: master,
 
     /**
      * Starts the sound. Call it from a user gesture (the Join button): browsers keep audio
@@ -134,6 +141,7 @@ export function createSoundEngine({ panel = null, audioContext = null, destinati
     start() {
       starting ??= (async () => {
         await ctx.resume();
+        started = true;
         await ready;
         organ.start();
         conductor.start(ctx.currentTime);
@@ -148,7 +156,9 @@ export function createSoundEngine({ panel = null, audioContext = null, destinati
       conductor.onState(state);
       applyVoiceGains();
       organ.set(organPoint(state.nest?.store, p.storeFull));
-      symbolTones.update(state.symbols, p);
+      // The symbol tones start oscillators, which a browser refuses (with a console warning)
+      // before the Join click; the first state after start() brings them in.
+      if (started) symbolTones.update(state.symbols, p);
     },
 
     /** An ant frame: the density of ants sets the rate of the ticks heard at the Ants level. */

@@ -3,8 +3,9 @@
 // came from, so in the top-down view a trail to the east is heard on the right.
 //
 // The sound engine plays through the listener's AudioContext (pass `listener.context` and
-// `listener.getInput()` to createSoundEngine). The ant ticks, the organ point and the symbol
-// tones stay unpositioned; only the four voices are placed.
+// `listener.getInput()` to createSoundEngine). Each voice goes voice bus → panner → the engine's
+// master bus, so the master volume and compressor still apply. The ant ticks, the organ point
+// and the symbol tones stay unpositioned; only the four voices are placed.
 
 import * as THREE from 'three';
 import { simToX, simToZ } from './coords.js';
@@ -59,7 +60,14 @@ export function createSpatialAudio(view) {
     /** Routes each voice's output through its PositionalAudio. */
     attach(soundEngine) {
       engine = soundEngine;
-      sources.forEach((audio, slot) => audio.setNodeSource(engine.detachVoiceOutput(slot)));
+      sources.forEach((audio, slot) => {
+        audio.setNodeSource(engine.detachVoiceOutput(slot));
+        // three.js sends a PositionalAudio's output straight to the listener. Send it back into
+        // the engine's master bus instead, so the positioned voices get the master volume and the
+        // compressor like everything else; the panner has already placed them by then.
+        audio.gain.disconnect();
+        audio.gain.connect(engine.input);
+      });
     },
   };
 }
