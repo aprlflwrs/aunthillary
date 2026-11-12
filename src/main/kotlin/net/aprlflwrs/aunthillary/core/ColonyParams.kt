@@ -56,7 +56,7 @@ class ColonyParams(val params: Params) {
     /** Time constant over which the distribution forgets past returns. */
     val headingMemory = p("headings.memory", "Memory (s)", "Headings", 1.0, 600.0, 1.0, 60.0)
     /** How much one empty-handed return counts against its direction (one food delivery counts 1). */
-    val emptyWeight = p("headings.emptyWeight", "Empty-handed return weight", "Headings", 0.0, 10.0, 0.05, 1.0)
+    val emptyWeight = p("headings.emptyWeight", "Empty-handed return weight", "Headings", 0.0, 10.0, 0.05, 0.5)
     /** Pseudo-returns spread evenly over all directions, so a handful of returns can't make a peak. */
     val headingPrior = p("headings.prior", "Even prior (returns)", "Headings", 0.0, 10_000.0, 10.0, 200.0)
 

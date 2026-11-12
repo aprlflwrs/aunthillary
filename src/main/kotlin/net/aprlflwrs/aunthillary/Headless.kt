@@ -59,8 +59,8 @@ private val usage = """
       --lesion             run the lesion test instead (options below)
       --seeds A,B,...      lesion: seeds to run (default 1,2,3)
       --lesion-build S     lesion: seconds with food before it is removed (default 240)
-      --lesion-wait S      lesion: seconds after removal before new food appears (default 120)
-      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 100)
+      --lesion-wait S      lesion: seconds after removal before new food appears (default 150)
+      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 300)
       --lesion-timeout S   lesion: give up measuring after this many seconds (default 300)
       --lesion-angle A     lesion: direction of the food from the nest, radians (default 0.785)
       --lesion-distance D  lesion: distance of the food from the nest (default 150)
@@ -85,8 +85,8 @@ data class HeadlessOptions(
     val lesion: Boolean = false,
     val seeds: List<Long> = listOf(1, 2, 3),
     val lesionBuild: Double = 240.0,
-    val lesionWait: Double = 120.0,
-    val lesionDeliveries: Int = 100,
+    val lesionWait: Double = 150.0,
+    val lesionDeliveries: Int = 300,
     val lesionTimeout: Double = 300.0,
     val lesionAngle: Double = PI / 4,
     val lesionDistance: Double = 150.0,
