@@ -153,7 +153,12 @@ export function createConductor({ output, params: initial = {}, random = Math.ra
     start(now) {
       if (grid) return;
       grid = createGridScheduler({ stepDuration: stepDuration(), startTime: now + START_DELAY });
-      // Voices seen before the start entered against step 0, which is still the next step.
+      // Voices seen before the start (while the page waited for Join) are entered afresh, so
+      // their phase is measured from the latest state rather than from when they were first seen.
+      tracker.active.clear();
+      paths.clear();
+      holdUntil.clear();
+      rebuild();
     },
 
     /** A new state message. Returns the entries, fades and exits it caused. */

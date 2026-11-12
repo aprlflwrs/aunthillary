@@ -33,6 +33,9 @@ import { WORLD_SIZE } from '../net/protocol.js';
 const SMOOTH = 0.08;
 /** Gain changes that follow the colony (a voice's strength) glide more slowly. */
 const FOLLOW = 0.5;
+/** The woodblock is short and loses its edge in the lowpass, so it gets extra gain (measured:
+ * ticks alone peaked near 0.03 without it). */
+const TICK_BOOST = 2;
 
 /**
  * Creates the engine. `audioContext` should be the Three.js AudioListener's context once the
@@ -91,7 +94,7 @@ export function createSoundEngine({ panel = null, audioContext = null, destinati
     const t = ctx.currentTime;
     const mix = levelMix(level);
     master.gain.setTargetAtTime(hidden ? 0 : p.masterVolume, t, timeConstant);
-    ticksBus.gain.setTargetAtTime(SAMPLE_GAIN * p.tickVolume * mix.ticks, t, timeConstant);
+    ticksBus.gain.setTargetAtTime(TICK_BOOST * SAMPLE_GAIN * p.tickVolume * mix.ticks, t, timeConstant);
     organBus.gain.setTargetAtTime(p.organVolume * mix.organ, t, timeConstant);
     symbolsBus.gain.setTargetAtTime(p.symbolVolume * mix.symbols, t, timeConstant);
     applyVoiceGains(timeConstant);

@@ -25,6 +25,7 @@ const connection = connect({
 });
 const panel = createTuningPanel(connection);
 const engine = createSoundEngine({ panel });
+window.soundEngine = engine; // for poking at from the browser console
 
 // Join: audio may only start from a user gesture.
 const join = document.getElementById('join');

@@ -8,8 +8,7 @@ fluidr3-gm/drawbar_organ/*.mp3, fluidr3-gm/reed_organ/*.mp3, fluidr3-gm/woodbloc
            commit 044fab8e1456bfafc5776e86dfd6bb8697149aef (gh-pages, 2021-12-17).
   Licence: Creative Commons Attribution 3.0 (CC BY 3.0), as stated by the midi-js-soundfonts
            README for the Fluid soundfont: https://creativecommons.org/licenses/by/3.0/
-           (The FluidR3_GM.sf2 SoundFont itself is also distributed under the MIT licence,
-           for example in Debian's fluid-soundfont package.)
+           (The repository's own MIT licence covers its code, not the samples.)
   Changes: each note's MP3 was base64-decoded out of the MIDI.js file and saved as its own
            file, byte for byte; only every third semitone from C2 to C7 (and C5, C6 of the
            woodblock) was kept. The audio itself is not modified on disk. At runtime the
