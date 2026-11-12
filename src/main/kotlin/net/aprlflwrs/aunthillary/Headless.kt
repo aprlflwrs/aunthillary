@@ -63,7 +63,7 @@ private val usage = """
       --png-every S        seconds between pheromone images, 0 for none (default 30)
       --link-threshold D   food density counted as trail when testing links (default ${TRAIL_THRESHOLD})
       --profile N          hold the population at N ants (fixed-population mode) to profile the tick
-      --swing-window S     seconds of history behind the population swing columns (default 300)
+      --swing-window S     seconds of history behind the population swing columns (default 900)
       --baseline N         run the script twice at a fixed population of N, as the colony and with
                            trail-following off; writes DIR/colony and DIR/baseline
       --lesion             run the lesion test instead (options below)
@@ -94,7 +94,7 @@ data class HeadlessOptions(
     val pngEvery: Double = 30.0,
     val linkThreshold: Double = TRAIL_THRESHOLD,
     val profileAnts: Int? = null,
-    val swingWindow: Double = 300.0,
+    val swingWindow: Double = 900.0,
     val baseline: Int? = null,
     val lesion: Boolean = false,
     val seeds: List<Long> = listOf(1, 2, 3),
@@ -272,7 +272,7 @@ class Baseline(private val o: HeadlessOptions) {
 }
 
 /** The metrics CSV: one row per interval. Stage timings are averages over the interval. */
-class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: Double = 300.0) {
+class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: Double = 900.0) {
     private val w = file.bufferedWriter()
     private var last: net.aprlflwrs.aunthillary.core.StageProfile.Snapshot? = null
     val swing = PopulationSwing(swingWindow)
@@ -410,27 +410,31 @@ class Lesion(private val o: HeadlessOptions) {
             .format(Locale.ROOT, px, py, o.lesionBuild, o.lesionWait, o.lesionDeliveries, 1.0 / HeadingDistribution.BINS))
         val csv = File(o.out, "lesion.csv").printWriter()
         csv.println("seed,identical_at_lesion,share_intact,share_flattened,symbol_intact,symbol_flattened," +
-            "old_trail_linked,seconds_intact,seconds_flattened")
-        val pairs = mutableListOf<Pair<Double, Double>>()
+            "old_trail_linked_intact,old_trail_linked_flattened,seconds_intact,seconds_flattened")
+        val pairs = mutableListOf<Triple<Double, Double, Boolean>>()
         for (seed in o.seeds) {
             val a = runOnce(seed, px, py, flatten = false)
             val b = runOnce(seed, px, py, flatten = true)
             val identical = a.fingerprintAtLesion == b.fingerprintAtLesion
             println(("  seed %d: found in %s s intact, %s s flattened. At the new food: share toward it %.4f intact, " +
-                "%.4f flattened; symbol strength %.2f intact, %.2f flattened; old trail %s; identical at the lesion: %s")
+                "%.4f flattened; symbol strength %.2f intact, %.2f flattened; old trail %s intact, %s flattened; identical at the lesion: %s")
                 .format(Locale.ROOT, seed, fmt(a.time), fmt(b.time), a.shareAtPlacement, b.shareAtPlacement,
-                    a.symbolAtPlacement, b.symbolAtPlacement, if (a.oldTrailLinked) "STILL LINKED" else "gone", identical))
+                    a.symbolAtPlacement, b.symbolAtPlacement, trail(a.oldTrailLinked), trail(b.oldTrailLinked), identical))
             csv.println(listOf(seed, identical, "%.4f".format(Locale.ROOT, a.shareAtPlacement),
                 "%.4f".format(Locale.ROOT, b.shareAtPlacement), "%.3f".format(Locale.ROOT, a.symbolAtPlacement),
-                "%.3f".format(Locale.ROOT, b.symbolAtPlacement), a.oldTrailLinked, a.time ?: "", b.time ?: "").joinToString(","))
-            if (a.time != null && b.time != null) pairs += a.time to b.time
+                "%.3f".format(Locale.ROOT, b.symbolAtPlacement), a.oldTrailLinked, b.oldTrailLinked, a.time ?: "", b.time ?: "").joinToString(","))
+            if (a.time != null && b.time != null) pairs += Triple(a.time, b.time, !a.oldTrailLinked && !b.oldTrailLinked)
         }
         csv.close()
-        if (pairs.isNotEmpty()) {
-            println("Mean time to find: %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds."
-                .format(Locale.ROOT, pairs.sumOf { it.first } / pairs.size, pairs.sumOf { it.second } / pairs.size,
-                    pairs.count { it.first < it.second }, pairs.size))
+        fun summary(label: String, ps: List<Triple<Double, Double, Boolean>>) {
+            if (ps.isEmpty()) return
+            println("%s: mean time to find %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds."
+                .format(Locale.ROOT, label, ps.sumOf { it.first } / ps.size, ps.sumOf { it.second } / ps.size,
+                    ps.count { it.first < it.second }, ps.size))
         }
+        summary("All seeds", pairs)
+        // A seed where the old trail outlived the wait measures the pheromone, not the symbol.
+        summary("Seeds whose old trail had faded in both runs", pairs.filter { it.third })
         println("Wrote ${o.out}/lesion.csv and each run's action log")
     }
 
@@ -477,6 +481,8 @@ class Lesion(private val o: HeadlessOptions) {
         val time = if (pile.delivered >= o.lesionDeliveries) t * World.DT else null
         return Run(fingerprint, share, symbol, linked, time)
     }
+
+    private fun trail(linked: Boolean) = if (linked) "STILL LINKED" else "gone"
 
     private fun fmt(v: Double?) = v?.let { "%.1f".format(Locale.ROOT, it) } ?: "never"
 }

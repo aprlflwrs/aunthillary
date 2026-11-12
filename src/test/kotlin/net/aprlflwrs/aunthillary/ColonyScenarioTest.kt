@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  *
  * The main run: one colony (seed 1, default parameters, on a 256² grid to keep `check` under
  * a minute; PheromoneGridTest shows the grid behaves the same at any resolution) gets two piles
- * of 25,000 units at the start, in directions about 110° apart, and runs until both are empty
+ * of 20,000 units at the start, in directions about 110° apart, and runs until both are empty
  * and the colony has had five minutes to forget them. A second, shorter run gets only the first
  * pile, to show that less food supports fewer ants. The two run at once, on two threads (each
  * colony is still single-threaded and deterministic). Every simulated second each run records
@@ -48,7 +48,7 @@ class ColonyScenarioTest {
         val PILES = listOf(400.0 to 300.0, 160.0 to 380.0)
         /** Same distance, in directions with no food: south-west and south-east. */
         val CONTROLS = listOf(256.0 - 106 to 256.0 - 106, 256.0 + 106 to 256.0 - 106)
-        const val PILE_AMOUNT = 25_000.0
+        const val PILE_AMOUNT = 20_000.0
         const val GRID = 256
 
         /** A symbol counts as "toward" a pile if its direction is within this of the pile's (2/3 of a bin). */

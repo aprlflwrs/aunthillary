@@ -101,7 +101,7 @@ class ColonyParams(val params: Params) {
     /** The crowded area around the nest: ants don't steer by pheromone inside it, and the detector ignores it. */
     val hubRadius = p("nest.hubRadius", "Hub radius (units)", "Nest", 2.0, 60.0, 0.5, 12.0)
     val initialAnts = p("nest.initialAnts", "Ants at start (on reset)", "Nest", 0.0, 100_000.0, 100.0, 3000.0)
-    val initialStore = p("nest.initialStore", "Store at start (on reset)", "Nest", 0.0, 100_000.0, 10.0, 2000.0)
+    val initialStore = p("nest.initialStore", "Store at start (on reset)", "Nest", 0.0, 100_000.0, 10.0, 1000.0)
     /** Food per new ant. Newborns hatch full (an egg is cheaper than a meal, so this is below mealSize). */
     val hatchCost = p("nest.hatchCost", "Food per new ant", "Nest", 0.0, 50.0, 0.05, 0.5)
     /** The store the nest keeps back before hatching: this many seconds of what the colony is eating. */

@@ -241,6 +241,11 @@ class AntColony(
             val i = hatch()
             ants.age[i] = (rng.nextDouble() * ants.lifespan[i]).toFloat()
         }
+        // Start the eating-rate average where these ants would be if they walked all the time,
+        // rather than at 0, so the whole initial store doesn't count as surplus and hatch a
+        // burst of ants that then starve.
+        val perAnt = (p.speed.value / p.range.value + 1 / p.fastingTime.value) * p.mealSize.value
+        eatingRate = ants.count * perAnt
     }
 
     private fun rebuildTerrain() {
