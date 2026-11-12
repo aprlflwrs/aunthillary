@@ -68,13 +68,14 @@ private val usage = """
                            trail-following off; writes DIR/colony and DIR/baseline
       --lesion             run the lesion test instead (options below)
       --seeds A,B,...      lesion: seeds to run (default 1,2,3)
-      --lesion-build S     lesion: seconds with food before it is removed (default 240)
-      --lesion-wait S      lesion: seconds after removal before new food appears (default 150)
-      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 300)
+      --lesion-build S     lesion: seconds with food before it is removed (default 300)
+      --lesion-wait S      lesion: seconds after removal before new food appears (default 120)
+      --lesion-deliveries K  lesion: deliveries from the new pile that count as found (default 100)
       --lesion-timeout S   lesion: give up measuring after this many seconds (default 300)
       --lesion-angle A     lesion: direction of the food from the nest, radians (default 0.785)
       --lesion-distance D  lesion: distance of the food from the nest (default 150)
       --no-lesion-sustain  lesion: no second pile opposite to keep the colony fed through the wait
+      --lesion-population N  lesion: hold the population at N, 0 for the free economy (default 10000)
 """.trimIndent()
 
 /** Food pheromone density that counts as trail for the link metric (and in the tests). */
@@ -97,13 +98,14 @@ data class HeadlessOptions(
     val baseline: Int? = null,
     val lesion: Boolean = false,
     val seeds: List<Long> = listOf(1, 2, 3),
-    val lesionBuild: Double = 240.0,
-    val lesionWait: Double = 150.0,
-    val lesionDeliveries: Int = 300,
+    val lesionBuild: Double = 300.0,
+    val lesionWait: Double = 120.0,
+    val lesionDeliveries: Int = 100,
     val lesionTimeout: Double = 300.0,
     val lesionAngle: Double = PI / 4,
     val lesionDistance: Double = 150.0,
     val lesionSustain: Boolean = true,
+    val lesionPopulation: Int = 10_000,
 ) {
     companion object {
         fun parse(args: Array<String>): HeadlessOptions {
@@ -149,6 +151,7 @@ data class HeadlessOptions(
                     "--lesion-angle" -> o.copy(lesionAngle = num(value()))
                     "--lesion-distance" -> o.copy(lesionDistance = num(value()))
                     "--no-lesion-sustain" -> o.copy(lesionSustain = false)
+                    "--lesion-population" -> o.copy(lesionPopulation = num(value()).toInt())
                     else -> throw IllegalArgumentException("Unknown option $a")
                 }
                 i++
@@ -382,6 +385,12 @@ private fun rgb(r: Double, g: Double, b: Double): Int {
  * only change ants born after that moment, which mostly haven't left the nest by the time the
  * food is found. So what is tested is the lingering peak during the wait, the colony's
  * "belief in food that is no longer there".
+ *
+ * By default the population is held fixed (`--lesion-population`, 10,000). Under the free
+ * hunger economy, removing a pile puts the colony in deficit, births stop until it has starved
+ * down to the new balance, and with no newborns the distribution has nothing to act through:
+ * the two runs then stay identical. At a fixed size, every ant that dies (of hunger or age) is
+ * replaced by a newborn whose heading comes from the distribution.
  */
 class Lesion(private val o: HeadlessOptions) {
     private class Run(
@@ -429,8 +438,13 @@ class Lesion(private val o: HeadlessOptions) {
         val colony = AntColony(seed, gridSize = o.grid)
         // The script both runs share, so they stay bit-identical until the lesion.
         val script = mutableListOf<LoggedAction>()
-        for ((k, v) in o.set) script += LoggedAction(0, Action.SetParam(k, v))
-        if (o.set.isNotEmpty()) script += LoggedAction(0, Action.Reset)
+        val settings = o.set.toMutableList()
+        if (o.lesionPopulation > 0) {
+            val n = o.lesionPopulation.toDouble()
+            settings += listOf("nest.initialAnts" to n, "nest.fixedPopulation" to n)
+        }
+        for ((k, v) in settings) script += LoggedAction(0, Action.SetParam(k, v))
+        if (settings.isNotEmpty()) script += LoggedAction(0, Action.Reset)
         script += LoggedAction(0, Action.PlaceFood(px, py))
         if (o.lesionSustain) {
             // A second pile opposite, so the colony stays fed (and doesn't starve to its floor) while the

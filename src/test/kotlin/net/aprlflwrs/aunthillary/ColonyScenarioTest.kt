@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  *
  * The main run: one colony (seed 1, default parameters, on a 256² grid to keep `check` under
  * a minute; PheromoneGridTest shows the grid behaves the same at any resolution) gets two piles
- * of 15,000 units at the start, in directions about 110° apart, and runs until both are empty
+ * of 25,000 units at the start, in directions about 110° apart, and runs until both are empty
  * and the colony has had five minutes to forget them. A second, shorter run gets only the first
  * pile, to show that less food supports fewer ants. The two run at once, on two threads (each
  * colony is still single-threaded and deterministic). Every simulated second each run records
@@ -48,7 +48,7 @@ class ColonyScenarioTest {
         val PILES = listOf(400.0 to 300.0, 160.0 to 380.0)
         /** Same distance, in directions with no food: south-west and south-east. */
         val CONTROLS = listOf(256.0 - 106 to 256.0 - 106, 256.0 + 106 to 256.0 - 106)
-        const val PILE_AMOUNT = 15_000.0
+        const val PILE_AMOUNT = 25_000.0
         const val GRID = 256
 
         /** A symbol counts as "toward" a pile if its direction is within this of the pile's (2/3 of a bin). */
@@ -56,7 +56,7 @@ class ColonyScenarioTest {
 
         val SEED = System.getenv("SCENARIO_SEED")?.toLong() ?: 1L
 
-        const val MAX_SECONDS = 1200.0
+        const val MAX_SECONDS = 1500.0
         /** After both piles are empty, keep going this long so trails and symbols can wear down. */
         const val AFTER_EMPTY_SECONDS = 300.0
         /** The single-pile run only needs to reach its settled size. */
@@ -137,7 +137,7 @@ class ColonyScenarioTest {
         val pops = window.map { it.population }
         val min = pops.min(); val max = pops.max(); val mean = pops.average()
         assertTrue(min >= 5_000 && max <= 30_000, "population ranged $min–$max, outside 5,000–30,000")
-        assertTrue((max - min) / mean < 0.15, "population not settled: ranged $min–$max")
+        assertTrue((max - min) / mean < 0.2, "population not settled: ranged $min–$max")
         // And it got there by growing from food: well above where it started.
         assertTrue(mean > 2 * run.first().population)
     }

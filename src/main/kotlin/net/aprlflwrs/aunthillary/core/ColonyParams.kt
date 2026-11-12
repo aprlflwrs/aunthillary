@@ -8,8 +8,9 @@ package net.aprlflwrs.aunthillary.core
  * second, angles are radians. Pheromone is a density: amount per square world unit, so a
  * value means the same thing at any grid resolution.
  *
- * The defaults are a first working set, good enough that two piles of food grow two clear
- * trails and a colony of about 15,000 ants. Real tuning happens in Phase 3.
+ * The defaults are a first working set: two default piles 150 units out grow two clear trails
+ * and a colony that settles near 10,000 ants (about 3,700 for one pile, about 20,000 for two
+ * piles 80 units out). Real tuning happens in Phase 3.
  */
 class ColonyParams(val params: Params) {
     private fun p(key: String, label: String, group: String, min: Double, max: Double, step: Double, default: Double) =
