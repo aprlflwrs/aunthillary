@@ -19,7 +19,16 @@
     /* The 3D view fills the window; touch-action: none lets pointer events drive pan and zoom. */
     #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
     #debug { display: none; margin: 0 auto; cursor: crosshair; }
-    #status { position: fixed; left: 8px; bottom: 8px; padding: 4px 8px; background: #0008; border-radius: 4px; }
+    /* The piano roll runs along the bottom; the status line sits just above it. */
+    #roll { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; height: 130px; background: #000c; }
+    body.no-roll #roll { display: none; }
+    #status { position: fixed; left: 8px; bottom: 138px; padding: 4px 8px; background: #0008; border-radius: 4px; }
+    body.no-roll #status { bottom: 8px; }
+    /* Browsers only allow audio after a click, so the sound starts from this button. */
+    #join { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 14px 28px;
+            font: 600 16px system-ui, sans-serif; color: #eee; background: #222e; border: 1px solid #666;
+            border-radius: 8px; cursor: pointer; }
+    #join:disabled { cursor: default; opacity: 0.8; }
     #status[data-connection="disconnected"] { color: #f66; }
     #controls { position: fixed; left: 8px; top: 8px; display: flex; gap: 16px; align-items: flex-start;
                 padding: 6px 10px; background: #000a; border-radius: 4px; user-select: none; }
@@ -35,7 +44,9 @@
   <canvas id="view"></canvas>
   <canvas id="debug"></canvas>
   <div id="controls"></div>
+  <canvas id="roll"></canvas>
   <div id="status">connecting…</div>
+  <button id="join">Join (start sound)</button>
   <script type="module" src="./main.js"></script>
 </body>
 </html>

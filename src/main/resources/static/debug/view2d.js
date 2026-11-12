@@ -5,8 +5,7 @@
 // (orange when carrying food), each voice's curve in its slot's color, and the heading ring.
 
 import { WORLD_SIZE, FLAG_CARRYING_FOOD } from '../net/protocol.js';
-
-const SLOT_COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231'];
+import { SLOT_COLORS } from '../ui/slotColors.js';
 
 export function createDebugView(canvas) {
   const ctx = canvas.getContext('2d');

@@ -1,6 +1,6 @@
 // Entry point. Wires the connection to the Three.js view (render/), the view controls and the
-// tuning panel (ui/), and the 2D debug view (debug/), which stays available as a toggle.
-// The sound engine (audio/) attaches in Phase 2 at the points marked "AUDIO".
+// tuning panel (ui/), the sound engine and piano roll (audio/), and the 2D debug view (debug/),
+// which stays available as a toggle.
 
 import { connect } from './net/connection.js';
 import { createTuningPanel } from './ui/tuning.js';
@@ -8,6 +8,7 @@ import { createViewControls, addViewFolder } from './ui/viewControls.js';
 import { onLevelChange } from './ui/level.js';
 import { createRenderView } from './render/scene.js';
 import { createDebugView } from './debug/view2d.js';
+import { createSoundEngine } from './audio/engine.js';
 
 const status = document.getElementById('status');
 const debugCanvas = document.getElementById('debug');
@@ -48,6 +49,7 @@ const connection = connect({
         lastStats.tick = message.tick;
         lastStats.ants = message.count;
         view.setAnts(message);
+        engine.onAnts(message);
         if (debugOn) debugView.setAnts(message);
         break;
       case 'pheromone':
@@ -57,6 +59,7 @@ const connection = connect({
         break;
       case 'terrain':
         view.setTerrain(message);
+        engine.onTerrain(message);
         break;
       case 'state':
         lastState = message;
@@ -64,7 +67,7 @@ const connection = connect({
         lastStats.symbols = message.symbols.length;
         view.setState(message);
         if (debugOn) debugView.setState(message);
-        // AUDIO (Phase 2): hand the state to the sound engine here, e.g. engine.setState(message).
+        engine.onState(message);
         break;
       case 'params':
         panel.applyParams(message.params);
@@ -74,9 +77,27 @@ const connection = connect({
 });
 
 const panel = createTuningPanel(connection);
-addViewFolder(panel.gui, view);
-// AUDIO (Phase 2): the sound engine adds its "Sound" folder here, through panel.gui, so
-// presets include it automatically.
+const viewFolder = addViewFolder(panel.gui, view);
+
+// The sound engine adds its "Sound" folder through panel.gui, so presets include it. For now
+// it plays through its own AudioContext; routing each voice into a Three.js PositionalAudio at
+// its trail (engine.detachVoiceOutput / voicePosition) comes with the rest of Phase 2.
+const engine = createSoundEngine({ panel });
+window.soundEngine = engine; // for poking at from the browser console
+
+// Audio may only start from a user gesture, so the sound waits for the Join button.
+const join = document.getElementById('join');
+join.addEventListener('click', async () => {
+  join.disabled = true;
+  join.textContent = 'Loading samples…';
+  await engine.start();
+  join.remove();
+});
+
+// The piano roll along the bottom, drawn from the very notes the engine plays.
+engine.attachPianoRoll(document.getElementById('roll'));
+const rollUi = { show: true };
+viewFolder.add(rollUi, 'show').name('Piano roll').onChange((on) => document.body.classList.toggle('no-roll', !on));
 
 createViewControls(document.getElementById('controls'), {
   onTilt: (t) => view.setTilt(t),
@@ -85,7 +106,7 @@ createViewControls(document.getElementById('controls'), {
 
 // The level of description drives the picture here, and the sound in Phase 2.
 onLevelChange((level) => view.setLevel(level));
-// AUDIO (Phase 2): onLevelChange((level) => engine.setLevel(level));
+onLevelChange((level) => engine.setLevel(level));
 
 // Clicking the 2D debug view places food too (the 3D view handles its own clicks).
 debugCanvas.addEventListener('click', (event) => {
