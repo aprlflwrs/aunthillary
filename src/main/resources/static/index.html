@@ -1,7 +1,29 @@
-<html>
- <head>
- </head>
- <body>
-   <h1>Hello Ktor!</h1>
- </body>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ant Fugue</title>
+  <!-- Every library is a pinned copy in vendor/ (see vendor/VERSIONS.txt), so the app runs offline. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "lil-gui": "./vendor/lil-gui/lil-gui.module.min.js",
+        "smplr": "./vendor/smplr/smplr.mjs"
+      }
+    }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; color: #ccc; font: 13px system-ui, sans-serif; overflow: hidden; }
+    #debug { display: block; margin: 0 auto; cursor: crosshair; }
+    #status { position: fixed; left: 8px; bottom: 8px; padding: 4px 8px; background: #0008; border-radius: 4px; }
+    #status[data-connection="disconnected"] { color: #f66; }
+  </style>
+</head>
+<body>
+  <canvas id="debug"></canvas>
+  <div id="status">connecting…</div>
+  <script type="module" src="./main.js"></script>
+</body>
 </html>

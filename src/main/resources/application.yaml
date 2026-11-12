@@ -3,6 +3,7 @@ ktor:
     port: 8080
   application:
     modules:
-      - net.aprlflwrs.SerializationKt.configureSerialization
-      - net.aprlflwrs.WebsocketsKt.configureWebsockets
-      - net.aprlflwrs.RoutingKt.configureRouting
+      - net.aprlflwrs.aunthillary.server.ServerKt.module
+aunthillary:
+  # Seed for the colony's random number generator. Same seed + same action log = same run.
+  seed: 1

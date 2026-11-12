@@ -1,0 +1,4 @@
+three.js 0.187.0 (r187), from npm "three"
+lil-gui 0.17.0, bundled with three 0.187.0 (examples/jsm/libs)
+smplr 1.2.0, from npm "smplr" (dist/index.mjs)
+smplr ships no LICENSE file; its package.json declares MIT.

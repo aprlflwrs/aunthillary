@@ -18,7 +18,6 @@ kotlin {
 dependencies {
     implementation(ktorLibs.serialization.kotlinx.json)
     implementation(ktorLibs.server.config.yaml)
-    implementation(ktorLibs.server.contentNegotiation)
     implementation(ktorLibs.server.core)
     implementation(ktorLibs.server.netty)
     implementation(ktorLibs.server.websockets)
@@ -33,3 +32,18 @@ ktor {
         archiveFileName.set("aunthillary.jar")
     }
 }
+
+// The browser decoder's tests (src/test/js) run under Node against the bytes the Kotlin tests
+// write, so `./gradlew check` verifies both sides of the protocol. Skipped if Node is missing.
+val nodeExecutable: File? = System.getenv("PATH").orEmpty().split(File.pathSeparator)
+    .map { File(it, "node") }.firstOrNull { it.canExecute() }
+
+val jsTest = tasks.register<Exec>("jsTest") {
+    group = "verification"
+    description = "Runs the JavaScript tests in src/test/js with Node."
+    dependsOn(tasks.test)
+    executable = nodeExecutable?.path ?: "node"
+    args("--test", "src/test/js/")
+    onlyIf("Node is installed") { nodeExecutable != null }
+}
+tasks.check { dependsOn(jsTest) }
