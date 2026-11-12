@@ -8,10 +8,13 @@ import kotlin.math.sqrt
  * Traces routes back from food piles through one search's tree (step 4), one call's worth.
  *
  * Each route is the chain of parents from a cell near the pile to the hub's edge, with one
- * addition, a merge: while walking back, if the route passes right beside a route already traced
- * this call, and stepping across onto it costs no more than [TrailConfig.mergeTolerance] (a share
- * of the route's cost so far) above staying put, the route steps across and follows that route the
- * rest of the way.
+ * addition, a merge: while walking back, if the route passes right beside a trail cell (at least
+ * the keep bar) of a route already traced this call, and stepping across onto it costs no more
+ * than [TrailConfig.mergeTolerance] (a share of the route's cost so far) above staying put, the
+ * route steps across and follows that route the rest of the way. Neighboring cells' costs differ by
+ * at most a step or two, so far from the hub almost any adjacent traced trail cell qualifies; the
+ * tolerance mainly stops merges close to the hub, where the costs are small and a sideways step
+ * would be a real detour.
  *
  * Why: a trail several cells wide holds parallel lanes that cost almost exactly the same. The
  * search tree picks one lane per cell, and nothing makes two piles' routes pick the same lane, so
@@ -19,8 +22,9 @@ import kotlin.math.sqrt
  * opening phrase. The ridge blur makes one lane cheapest in most places; merging handles the rest
  * (for instance a trail whose center lies exactly between two rows of cells). Two routes that
  * reach the same cell share everything from there to the hub anyway, because the tree gives every
- * cell one parent; merging only extends that to near-ties. Since a merge is only taken when it is
- * nearly as cheap, it never drags a route onto a different trail.
+ * cell one parent; merging only extends that to trails that pass within one cell of each other.
+ * (Two different trails that cross or touch are therefore joined there, just as the search tree
+ * itself joins trails that share a cell.)
  */
 internal class RouteTracer(
     private val size: Int,
@@ -32,6 +36,7 @@ internal class RouteTracer(
     private val cfg: TrailConfig,
 ) {
     private val traced = ArrayList<IntArray>()
+    private val trailBar = cfg.threshold * cfg.keepRatio
 
     /** Cell → (index into [traced]) shl 32 or (position in that route), for every traced cell. */
     private val owner = HashMap<Int, Long>()
@@ -101,6 +106,8 @@ internal class RouteTracer(
                 if (nx < 0 || nx >= size) continue
                 val a = ny * size + nx
                 if (a !in owner) continue
+                // Only onto trail: never onto the bare-ground stretch of some untrailed pile's route.
+                if (strength[a] < trailBar) continue
                 val step = (if (dx != 0 && dy != 0) cell * SQRT2 else cell) * (cost[c] + cost[a]) / 2
                 val via = dist[a] + step
                 if (via <= limit && (via < bestCost || (via == bestCost && a < best))) {

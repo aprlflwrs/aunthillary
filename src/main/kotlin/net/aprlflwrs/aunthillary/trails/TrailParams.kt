@@ -94,8 +94,9 @@ data class TrailConfig(
      */
     val ridgeBlur: Double,
     /**
-     * A route tracing back that passes right beside an already traced one steps onto it if that
-     * costs at most this share more than its own way (see [RouteTracer]).
+     * A route tracing back that passes right beside a trail cell of an already traced route steps
+     * onto it if that costs at most this share more than its own way (see [RouteTracer]). In
+     * practice this only refuses merges close to the hub.
      */
     val mergeTolerance: Double,
     /** Cells on last call's voices cost this share less. */
