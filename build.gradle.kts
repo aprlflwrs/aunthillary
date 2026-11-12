@@ -27,3 +27,9 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation(ktorLibs.server.testHost)
 }
+
+ktor {
+    fatJar {
+        archiveFileName.set("aunthillary.jar")
+    }
+}
