@@ -20,12 +20,16 @@ import kotlin.math.sqrt
  *    from the cells just outside them, so routes begin at the hub's edge instead of crowding
  *    through the hub.
  * 3. **Search.** One multi-source shortest-path search ([PathSearch]) from the hub's edge over the
- *    whole grid. A cell costs `(1 + floor) / (strength + floor)` per world unit (1 on a full-
- *    strength trail, about 21 on bare ground with the default floor of 0.05), blocked cells cannot
+ *    whole grid. Strengths are first blurred a little (`trails.ridgeBlur`) so a wide trail has one
+ *    cheapest lane down its middle. A cell then costs `(1 + floor) / (blurred + floor)` per world
+ *    unit (1 on a full-strength trail, about 21 on bare ground with the default floor of 0.05),
+ *    blocked cells cannot
  *    be crossed, and cells on last call's voices cost `trails.routeDiscount` less, so a voice does
  *    not flicker between two nearly equal routes.
  * 4. **Routes.** From each food pile (live or ghost), the strongest reachable cell within
- *    `trails.pileRadius` is traced back through the search tree to the hub. The route is accepted
+ *    `trails.pileRadius` is traced back through the search tree to the hub ([RouteTracer]), stepping
+ *    onto an already traced route that runs right beside it when that is nearly as cheap, so voices
+ *    on the same trail share one lane rather than running side by side. The route is accepted
  *    only if no stretch longer than `trails.maxGap` falls below the bar and at least half of it is
  *    above the bar. Living voices are held to a lower bar (`threshold × keepRatio`) so a voice
  *    near the threshold doesn't flicker on and off.
