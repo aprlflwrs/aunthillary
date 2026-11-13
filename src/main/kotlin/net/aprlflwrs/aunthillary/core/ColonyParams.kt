@@ -71,8 +71,13 @@ class ColonyParams(val params: Params) {
     // ---- Headings (the caste distribution of preferred directions) ----
     /** Share of newborns given a uniformly random heading, so exploration never stops. */
     val randomShare = p("headings.randomShare", "Random share of newborns", "Headings", 0.0, 1.0, 0.01, 0.3)
-    /** Time constant over which the distribution forgets past returns. */
-    val headingMemory = p("headings.memory", "Memory (s)", "Headings", 1.0, 600.0, 1.0, 60.0)
+    /**
+     * The most evidence one direction bin can hold, in deliveries. The distribution doesn't fade
+     * with time: each delivery moves its bin 1/capacity of the way up to this cap, and each
+     * empty-handed return takes emptyWeight off it, so capacity / emptyWeight failed trips undo
+     * even a belief built over a whole pile (see HeadingDistribution).
+     */
+    val headingCapacity = p("headings.capacity", "Evidence held per direction (deliveries)", "Headings", 10.0, 20_000.0, 10.0, 600.0)
     /** How much one empty-handed return counts against its direction (one food delivery counts 1). */
     val emptyWeight = p("headings.emptyWeight", "Empty-handed return weight", "Headings", 0.0, 10.0, 0.05, 0.2)
     /**
