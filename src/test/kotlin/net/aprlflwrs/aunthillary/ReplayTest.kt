@@ -96,4 +96,35 @@ class ReplayTest {
         Replayer(b, a.log.actions).run(steps)
         assertNotEquals(a.fingerprint(), b.fingerprint())
     }
+
+    /**
+     * The lesion test relies on this: two colonies identical up to the lesion, one of them
+     * flattened, must then go different ways. (Seed 2 of the lesion once gave the same time to
+     * 100 deliveries in both runs; that was a coincidence of whole ticks, not runs that failed
+     * to diverge, and this guards the second possibility.)
+     */
+    @Test
+    fun `flattening the headings evens them out, and the two colonies then diverge`() {
+        fun colony(): AntColony {
+            val c = AntColony(7, gridSize = 128, terrainSize = 64)
+            c.setParam("nest.initialAnts", 800.0)
+            c.reset()
+            c.placeFood(380.0, 300.0)
+            repeat(40 * World.TICKS_PER_SECOND) { c.step() }
+            return c
+        }
+        val intact = colony()
+        val flattened = colony()
+        assertEquals(intact.fingerprint(), flattened.fingerprint())
+        val even = 1.0 / net.aprlflwrs.aunthillary.core.HeadingDistribution.BINS
+        assertTrue(intact.headingShares().max() > 1.5 * even, "the intact colony should have learned a direction")
+
+        flattened.flattenHeadings()
+        for (s in flattened.headingShares()) assertEquals(even, s, 1e-12)
+        repeat(5 * World.TICKS_PER_SECOND) { intact.step(); flattened.step() }
+        assertNotEquals(intact.fingerprint(), flattened.fingerprint())
+        // Not only the weights: the ants themselves went different ways.
+        val n = minOf(intact.population, flattened.population)
+        assertTrue((0 until n).any { intact.ants.heading[it] != flattened.ants.heading[it] })
+    }
 }

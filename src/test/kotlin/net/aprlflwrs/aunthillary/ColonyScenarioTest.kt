@@ -1,6 +1,7 @@
 package net.aprlflwrs.aunthillary
 
 import net.aprlflwrs.aunthillary.core.AntColony
+import net.aprlflwrs.aunthillary.core.HeadingDistribution
 import net.aprlflwrs.aunthillary.core.TrailMetrics
 import net.aprlflwrs.aunthillary.core.World
 import java.util.concurrent.CompletableFuture
@@ -17,7 +18,7 @@ import kotlin.test.assertTrue
  * The main run: one colony (seed 1, default parameters, on a 256² grid to keep `check` under
  * a minute; PheromoneGridTest shows the grid behaves the same at any resolution) gets two piles
  * of 20,000 units at the start, in directions about 110° apart, and runs until both are empty
- * and the colony has had seven minutes to forget them. A second, shorter run gets only the first
+ * and seven minutes more, as the colony starves to its floor. A second, shorter run gets only the first
  * pile, to show that less food supports fewer ants. The two run at once, on two threads (each
  * colony is still single-threaded and deterministic). Every simulated second each run records
  * the metrics below, and the tests read them.
@@ -39,10 +40,13 @@ class ColonyScenarioTest {
         val linked: List<Boolean>,
         /** Per control probe (directions with no food), the same. */
         val controlLinked: List<Boolean>,
-        /** Directions and ids of the symbols. */
-        val symbols: List<Pair<Double, Int>>,
+        val symbols: List<SymbolSample>,
+        /** The heading distribution's weights, one per bin. */
+        val weights: DoubleArray,
         val foodTotal: Double,
     )
+
+    class SymbolSample(val direction: Double, val id: Int, val strength: Double)
 
     class Run(val colony: AntColony, val samples: List<Sample>)
 
@@ -60,7 +64,7 @@ class ColonyScenarioTest {
         val SEED = System.getenv("SCENARIO_SEED")?.toLong() ?: 1L
 
         const val MAX_SECONDS = 1500.0
-        /** After both piles are empty, keep going this long so trails and symbols can wear down. */
+        /** After both piles are empty, keep going this long so trails fade and the colony starves to its floor. */
         const val AFTER_EMPTY_SECONDS = 420.0
         /** The single-pile run only needs to reach its settled size. */
         const val SINGLE_SECONDS = 450.0
@@ -95,7 +99,8 @@ class ColonyScenarioTest {
                     amounts = c.piles.map { it.amount },
                     linked = links.take(piles.size),
                     controlLinked = links.drop(piles.size),
-                    symbols = c.symbols().map { it.direction to it.id },
+                    symbols = c.symbols().map { SymbolSample(it.direction, it.id, it.strength) },
+                    weights = c.headings.weightsCopy(),
                     foodTotal = TrailMetrics.total(c.grid.food, c.grid.size),
                 )
                 if (allEmptyAt.isNaN() && c.piles.all { it.amount <= 0 }) allEmptyAt = seconds
@@ -113,7 +118,18 @@ class ColonyScenarioTest {
             return s.seconds
         }
 
-        fun symbolsToward(s: Sample, i: Int) = s.symbols.filter { angleBetween(it.first, pileDirection(i)) < ANGLE_TOLERANCE }
+        fun symbolsToward(s: Sample, i: Int) = s.symbols.filter { angleBetween(it.direction, pileDirection(i)) < ANGLE_TOLERANCE }
+
+        /** The ids of the symbols that pointed at pile [i] while it had food. */
+        fun symbolIds(i: Int) = run.filter { it.amounts[i] > 0 }.flatMap { symbolsToward(it, i) }.map { it.id }.toSet()
+
+        /** The last second at which one of pile [i]'s symbols (by id, wherever it has drifted) was alive. */
+        fun symbolLastSeen(i: Int): Double {
+            val ids = symbolIds(i)
+            return run.last { s -> s.symbols.any { it.id in ids } }.seconds
+        }
+
+        fun pileBin(i: Int) = HeadingDistribution.binOf(pileDirection(i))
     }
 
     @Test
@@ -183,7 +199,7 @@ class ColonyScenarioTest {
     }
 
     @Test
-    fun `a symbol forms toward each pile and wears down after its food is gone`() {
+    fun `a symbol forms toward each pile and outlives its food`() {
         for (i in PILES.indices) {
             // It forms while the pile has food, and holds for at least half a minute. (Not necessarily all
             // the time: the symbols compete for newborns, so a busier pile's symbol can crowd out a
@@ -193,20 +209,44 @@ class ColonyScenarioTest {
             assertTrue(longest >= 30, "symbol toward pile $i held for at most $longest seconds while it had food")
             // While it lasts it keeps one identity: from one second to the next, the id never changes.
             for ((a, b) in run.zipWithNext()) {
-                val before = symbolsToward(a, i).map { it.second }.toSet()
-                val after = symbolsToward(b, i).map { it.second }.toSet()
+                val before = symbolsToward(a, i).map { it.id }.toSet()
+                val after = symbolsToward(b, i).map { it.id }.toSet()
                 assertTrue(before.isEmpty() || after.isEmpty() || before.intersect(after).isNotEmpty(),
                     "the symbol toward pile $i changed identity at ${b.seconds}s: $before -> $after")
             }
-            // It outlives its food (the colony's belief lingers), and is gone within seven minutes.
-            // (At the floor the colony makes few trips, so the peak wears down mostly by fading,
-            // with time constant headings.memory.)
-            val lastSeen = run.last { symbolsToward(it, i).isNotEmpty() }.seconds
-            assertTrue(lastSeen > emptiedAt(i), "the symbol should outlive its food a little")
-            assertTrue(lastSeen < emptiedAt(i) + AFTER_EMPTY_SECONDS - 10,
-                "the symbol toward pile $i lasted until ${lastSeen}s; food ran out at ${emptiedAt(i)}s")
+            // It outlives its food: the colony's belief lingers after the trail is gone. (Followed
+            // by id, since a fading peak can shrink onto a neighboring bin.)
+            assertTrue(symbolLastSeen(i) > emptiedAt(i) + 30,
+                "the symbol toward pile $i should outlive its food; last seen ${symbolLastSeen(i)}s, food ran out at ${emptiedAt(i)}s")
         }
         // At some moment both symbols are there together.
         assertTrue(run.any { s -> PILES.indices.all { symbolsToward(s, it).isNotEmpty() } })
+    }
+
+    /**
+     * The heading distribution changes only with evidence (deliveries and empty-handed returns),
+     * not with time. So after the food is gone, a belief wears down only as fast as ants come
+     * home empty-handed from that direction. Most of those come as the colony starves: its
+     * foragers keep going back to the piles they knew, and fail. How that wave divides between
+     * the two directions depends on the run (with seed 1 the pile that ran out last takes nearly
+     * all of it and its symbol is gone within about a minute; with seed 2 the piles run out seven
+     * seconds apart, the wave is split, and both symbols outlive it). Once the colony is at its
+     * floor of a few hundred ants, it brings home too few reports to wear down what is left within
+     * the run, so whatever belief survives the wave lingers. So each belief is only required to
+     * have weakened, and to stay still at the floor.
+     */
+    @Test
+    fun `beliefs wear down only with empty-handed returns`() {
+        for (i in PILES.indices) {
+            val atEmpty = run.first { it.seconds >= emptiedAt(i) }.weights[pileBin(i)]
+            val atEnd = run.last().weights[pileBin(i)]
+            assertTrue(atEnd < 0.9 * atEmpty, "the weight toward pile $i went from $atEmpty when it ran out to $atEnd at the end")
+        }
+        // At the floor nothing else changes it: over the last minute, with a few hundred ants, the
+        // weights move only as far as a handful of reports can move them.
+        val minuteAgo = run[run.size - 61].weights
+        val change = run.last().weights.indices.sumOf { kotlin.math.abs(run.last().weights[it] - minuteAgo[it]) }
+        assertTrue(change < 0.05 * minuteAgo.sum().coerceAtLeast(1.0) + 30,
+            "the weights changed by $change in the last minute at the floor")
     }
 }

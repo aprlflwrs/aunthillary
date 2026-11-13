@@ -15,7 +15,8 @@ import kotlin.random.Random
  *     yield left this tick; otherwise it stands and waits), homes in on a nearby pile's scent,
  *     or steers by food pheromone, and gives up after a while; a returning ant steers by home
  *     pheromone and a weak pull toward the nest, and on arrival delivers its load (or its
- *     empty-handed report) and eats from the store. Then a random turn, the ant burns energy
+ *     empty-handed report), which is the only thing that changes the heading distribution,
+ *     and eats from the store. Then a random turn, the ant burns energy
  *     for the distance it walked and the time that passed (dying of starvation at zero), and
  *     it lays pheromone: home pheromone while searching, food pheromone while carrying,
  *     fading with the time since its trip began.
@@ -23,8 +24,9 @@ import kotlin.random.Random
  *  4. **Everything else**: the nest hatches newborns from the store's surplus over its
  *     reserve (heading drawn from the heading distribution), or, in fixed-population mode,
  *     tops up and culls to the fixed size; it tops the population up to its floor; the
- *     distribution fades; the mound's terrain is rebuilt once a second if it grew; and twice
- *     a second the symbol tracker reads the distribution.
+ *     mound's terrain is rebuilt once a second if it grew; and twice a second the symbol
+ *     tracker reads the distribution. (The distribution doesn't fade with time: it changes
+ *     only when an ant reports at the nest, in step 2.)
  *
  * The economy (see "Nest and food economy" in the plan). Energy E runs from 1 to 0:
  *
@@ -312,6 +314,7 @@ class AntColony(
         val scent2 = p.scentRadius.value * p.scentRadius.value
         val scentTurn = p.scentTurnRate.value * dt
         val emptyWeight = p.emptyWeight.value
+        val capacity = p.headingCapacity.value
         val recruitShare = p.recruitShare.value
         val randomShare = p.randomShare.value
         val prior = p.headingPrior.value
@@ -429,9 +432,9 @@ class AntColony(
                 val angle = ants.eventAngle[i].toDouble()
                 if (flags and Ants.CARRYING != 0) {
                     deliver(ants.pile[i])
-                    if (!angle.isNaN()) headings.record(angle, 1.0)
+                    if (!angle.isNaN()) headings.recordDelivery(angle, capacity)
                 } else if (!angle.isNaN()) {
-                    headings.record(angle, -emptyWeight)
+                    headings.recordEmpty(angle, emptyWeight)
                     totalEmptyReturns++
                 }
                 val carried = flags and Ants.CARRYING != 0
@@ -582,8 +585,6 @@ class AntColony(
         val floor = minOf(p.populationFloor.value.toInt(), cap)
         while (ants.count < floor) hatch()
 
-        headings.fade(StrictMath.exp(-dt / p.headingMemory.value))
-
         // The mound's terrain is rebuilt at most once a second (on whole-second ticks).
         if ((tick + 1) % World.TICKS_PER_SECOND == 0L && moundHeight != appliedMound) rebuildTerrain()
     }
@@ -642,13 +643,10 @@ class AntColony(
             // A voice belongs to a symbol when its food pile lies in one of the symbol's bins, seen from the nest.
             voiceIds = voices.filter { v ->
                 val pile = pileList.firstOrNull { it.id == v.foodId } ?: return@filter false
-                binOf(StrictMath.atan2(pile.y - nestY, pile.x - nestX)) in t.bins
+                HeadingDistribution.binOf(StrictMath.atan2(pile.y - nestY, pile.x - nestX)) in t.bins
             }.map { it.id },
         )
     }
-
-    private fun binOf(angle: Double) =
-        (StrictMath.floor(HeadingDistribution.wrap(angle) / HeadingDistribution.BIN_WIDTH + 0.5).toInt()) % HeadingDistribution.BINS
 
     override fun state(): ColonyState {
         val linger = (p.emptyLinger.value * World.TICKS_PER_SECOND).toLong()

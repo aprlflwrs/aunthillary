@@ -394,7 +394,7 @@ class MetricsWriter(
         w.write("tick,seconds,population,store,mound,piles,food_left,delivered,empty_returns,piles_linked," +
             "symbols,symbol_directions,food_pheromone,home_pheromone,ms_ants,ms_pheromone,ms_other," +
             "hatched,starved,old_age,eating_rate,pop_mean,pop_swing,pop_period," +
-            "voices,voice_share_1,voice_share_2,shared_opening\n")
+            "voices,voice_share_1,voice_share_2,shared_opening,symbol_ids,symbol_strengths\n")
     }
 
     fun write(colony: AntColony) {
@@ -438,6 +438,8 @@ class MetricsWriter(
             voices?.let { f(it.shareOne) } ?: "",
             voices?.let { f(it.shareTwo) } ?: "",
             voices?.lastShared?.takeIf { !it.isNaN() }?.let { f(it) } ?: "",
+            symbols.joinToString(";") { it.id.toString() },
+            symbols.joinToString(";") { "%.3f".format(Locale.ROOT, it.strength) },
         ).joinToString(",") + "\n")
     }
 
@@ -495,24 +497,38 @@ private fun rgb(r: Double, g: Double, b: Double): Int {
  * and get new food at the same spot. The result is the time until `--lesion-deliveries` units
  * of the new food reach the nest.
  *
- * The flattening happens when the food is removed, not when the new food appears, because a
- * newborn's heading is its only link to the distribution: flattening at the new food would
- * only change ants born after that moment, which mostly haven't left the nest by the time the
- * food is found. So what is tested is the lingering peak during the wait, the colony's
- * "belief in food that is no longer there".
+ * The flattening happens when the food is removed, not when the new food appears, because the
+ * distribution acts only through the ants that draw a heading from it (newborns, and ants
+ * recruited when they come home empty-handed): flattening at the new food would change only
+ * ants that draw after that moment, which mostly haven't left the nest by the time the food is
+ * found. So what is tested is the lingering peak during the wait, the colony's "belief in food
+ * that is no longer there".
  *
- * By default the population is held fixed (`--lesion-population`, 10,000). Under the free
- * hunger economy, removing a pile puts the colony in deficit, births stop until it has starved
- * down to the new balance, and with no newborns the distribution has nothing to act through:
- * the two runs then stay identical. At a fixed size, every ant that dies (of hunger or age) is
- * replaced by a newborn whose heading comes from the distribution.
+ * At the new food, besides the distribution's share toward it and the symbol's strength, the
+ * test reports two steps of how the belief reaches the ground: the share of all ants whose
+ * preferred heading points into that bin, and the share of searching ants (outside the hub)
+ * that actually stand in that bin's wedge of the map. An evenly spread colony has 1/bins of each.
+ * It also reports when the new food was first picked up and first delivered.
+ *
+ * By default the population is held fixed (`--lesion-population`, 10,000), so that both runs
+ * have the same number of ants: under the free hunger economy, removing a pile puts the colony
+ * in deficit and it starves down to a new size, and how fast it does so then differs between
+ * the runs. At a fixed size, every ant that dies is replaced by a newborn, and every ant that
+ * comes home empty-handed is recruited; both draw their heading from the distribution.
+ *
+ * The summary pairs the runs by seed: the runs of one seed share everything up to the lesion,
+ * so the noise that matters is the spread of the per-seed differences, not of the times.
  */
 class Lesion(private val o: HeadlessOptions) {
     private class Run(
         val fingerprintAtLesion: Long,
         val shareAtPlacement: Double,
         val symbolAtPlacement: Double,
+        val preferringAtPlacement: Double,
+        val searchingThereAtPlacement: Double,
         val oldTrailLinked: Boolean,
+        val firstPickup: Double?,
+        val firstDelivery: Double?,
         val time: Double?,
     )
 
@@ -525,27 +541,39 @@ class Lesion(private val o: HeadlessOptions) {
             .format(Locale.ROOT, px, py, o.lesionBuild, o.lesionWait, o.lesionDeliveries, 1.0 / HeadingDistribution.BINS))
         val csv = File(o.out, "lesion.csv").printWriter()
         csv.println("seed,identical_at_lesion,share_intact,share_flattened,symbol_intact,symbol_flattened," +
-            "old_trail_linked_intact,old_trail_linked_flattened,seconds_intact,seconds_flattened")
+            "preferring_intact,preferring_flattened,searching_there_intact,searching_there_flattened," +
+            "old_trail_linked_intact,old_trail_linked_flattened,first_pickup_intact,first_pickup_flattened," +
+            "first_delivery_intact,first_delivery_flattened,seconds_intact,seconds_flattened")
         val pairs = mutableListOf<Triple<Double, Double, Boolean>>()
+        val f4 = { v: Double -> "%.4f".format(Locale.ROOT, v) }
         for (seed in o.seeds) {
             val a = runOnce(seed, px, py, flatten = false)
             val b = runOnce(seed, px, py, flatten = true)
             val identical = a.fingerprintAtLesion == b.fingerprintAtLesion
-            println(("  seed %d: found in %s s intact, %s s flattened. At the new food: share toward it %.4f intact, " +
-                "%.4f flattened; symbol strength %.2f intact, %.2f flattened; old trail %s intact, %s flattened; identical at the lesion: %s")
-                .format(Locale.ROOT, seed, fmt(a.time), fmt(b.time), a.shareAtPlacement, b.shareAtPlacement,
-                    a.symbolAtPlacement, b.symbolAtPlacement, trail(a.oldTrailLinked), trail(b.oldTrailLinked), identical))
-            csv.println(listOf(seed, identical, "%.4f".format(Locale.ROOT, a.shareAtPlacement),
-                "%.4f".format(Locale.ROOT, b.shareAtPlacement), "%.3f".format(Locale.ROOT, a.symbolAtPlacement),
-                "%.3f".format(Locale.ROOT, b.symbolAtPlacement), a.oldTrailLinked, b.oldTrailLinked, a.time ?: "", b.time ?: "").joinToString(","))
+            println(("  seed %d: found in %s s intact, %s s flattened (first pickup %s / %s s, first delivery %s / %s s). " +
+                "At the new food, intact / flattened: share toward it %.4f / %.4f; symbol strength %.2f / %.2f; " +
+                "ants preferring it %.4f / %.4f; searchers out there %.4f / %.4f; old trail %s / %s; identical at the lesion: %s")
+                .format(Locale.ROOT, seed, fmt(a.time), fmt(b.time), fmt(a.firstPickup), fmt(b.firstPickup),
+                    fmt(a.firstDelivery), fmt(b.firstDelivery), a.shareAtPlacement, b.shareAtPlacement,
+                    a.symbolAtPlacement, b.symbolAtPlacement, a.preferringAtPlacement, b.preferringAtPlacement,
+                    a.searchingThereAtPlacement, b.searchingThereAtPlacement, trail(a.oldTrailLinked), trail(b.oldTrailLinked), identical))
+            csv.println(listOf(seed, identical, f4(a.shareAtPlacement), f4(b.shareAtPlacement),
+                "%.3f".format(Locale.ROOT, a.symbolAtPlacement), "%.3f".format(Locale.ROOT, b.symbolAtPlacement),
+                f4(a.preferringAtPlacement), f4(b.preferringAtPlacement), f4(a.searchingThereAtPlacement), f4(b.searchingThereAtPlacement),
+                a.oldTrailLinked, b.oldTrailLinked, a.firstPickup ?: "", b.firstPickup ?: "", a.firstDelivery ?: "", b.firstDelivery ?: "",
+                a.time ?: "", b.time ?: "").joinToString(","))
             if (a.time != null && b.time != null) pairs += Triple(a.time, b.time, !a.oldTrailLinked && !b.oldTrailLinked)
         }
         csv.close()
         fun summary(label: String, ps: List<Triple<Double, Double, Boolean>>) {
             if (ps.isEmpty()) return
-            println("%s: mean time to find %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds."
+            val diffs = ps.map { it.second - it.first } // positive: the intact colony was faster
+            val mean = diffs.average()
+            val sd = if (diffs.size > 1) StrictMath.sqrt(diffs.sumOf { (it - mean) * (it - mean) } / (diffs.size - 1)) else Double.NaN
+            println(("%s: mean time to find %.1f s intact, %.1f s flattened; intact faster in %d of %d seeds; " +
+                "paired difference (flattened − intact) %.1f s, standard deviation %.1f s, standard error %.1f s.")
                 .format(Locale.ROOT, label, ps.sumOf { it.first } / ps.size, ps.sumOf { it.second } / ps.size,
-                    ps.count { it.first < it.second }, ps.size))
+                    ps.count { it.first < it.second }, ps.size, mean, sd, sd / StrictMath.sqrt(diffs.size.toDouble())))
         }
         summary("All seeds", pairs)
         // A seed where the old trail outlived the wait measures the pheromone, not the symbol.
@@ -579,22 +607,51 @@ class Lesion(private val o: HeadlessOptions) {
         colony.removeFood(colony.piles.first().id)
         repeat(seconds(o.lesionWait).toInt()) { colony.step() }
 
-        val bin = (StrictMath.floor(HeadingDistribution.wrap(o.lesionAngle) / HeadingDistribution.BIN_WIDTH + 0.5).toInt()) %
-            HeadingDistribution.BINS
+        val bin = HeadingDistribution.binOf(o.lesionAngle)
         val share = colony.headingShares()[bin]
         val symbol = colony.symbols().filter { angleBetween(it.direction, o.lesionAngle) < it.width / 2 + 0.2 }
             .maxOfOrNull { it.strength } ?: 0.0
         val linked = TrailMetrics.linked(colony.grid.food, colony.grid.size, colony.nestX, colony.nestY,
             colony.p.hubRadius.value, listOf(px to py), colony.p.scentRadius.value, o.linkThreshold)[0]
+        val (preferring, searchingThere) = antsToward(colony, bin)
 
         colony.placeFood(px, py)
         val pile = colony.piles.last()
         val limit = seconds(o.lesionTimeout)
         var t = 0L
-        while (pile.delivered < o.lesionDeliveries && t < limit) { colony.step(); t++ }
+        var firstPickup: Double? = null
+        var firstDelivery: Double? = null
+        while (pile.delivered < o.lesionDeliveries && t < limit) {
+            colony.step(); t++
+            if (firstPickup == null && pile.pickedUp > 0) firstPickup = t * World.DT
+            if (firstDelivery == null && pile.delivered > 0) firstDelivery = t * World.DT
+        }
         colony.log.write(File(o.out, "lesion_seed${seed}_${if (flatten) "flattened" else "intact"}.log"))
         val time = if (pile.delivered >= o.lesionDeliveries) t * World.DT else null
-        return Run(fingerprint, share, symbol, linked, time)
+        return Run(fingerprint, share, symbol, preferring, searchingThere, linked, firstPickup, firstDelivery, time)
+    }
+
+    /**
+     * The share of all ants whose preferred heading falls in [bin], and the share of searching
+     * ants outside the hub that stand in [bin]'s wedge of the map, seen from the nest.
+     */
+    private fun antsToward(colony: AntColony, bin: Int): Pair<Double, Double> {
+        val ants = colony.ants
+        val hub2 = colony.p.hubRadius.value * colony.p.hubRadius.value
+        var preferring = 0
+        var searching = 0
+        var searchingThere = 0
+        for (i in 0 until ants.count) {
+            val pref = StrictMath.atan2(ants.prefSin[i].toDouble(), ants.prefCos[i].toDouble())
+            if (HeadingDistribution.binOf(pref) == bin) preferring++
+            if (ants.flags[i].toInt() and net.aprlflwrs.aunthillary.core.Ants.RETURNING != 0) continue
+            val dx = ants.x[i] - colony.nestX
+            val dy = ants.y[i] - colony.nestY
+            if (dx * dx + dy * dy <= hub2) continue
+            searching++
+            if (HeadingDistribution.binOf(StrictMath.atan2(dy, dx)) == bin) searchingThere++
+        }
+        return preferring.toDouble() / ants.count.coerceAtLeast(1) to searchingThere.toDouble() / searching.coerceAtLeast(1)
     }
 
     private fun trail(linked: Boolean) = if (linked) "STILL LINKED" else "gone"
