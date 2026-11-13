@@ -5,6 +5,7 @@ import net.aprlflwrs.aunthillary.core.TrailMetrics
 import net.aprlflwrs.aunthillary.core.World
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
+import org.junit.experimental.categories.Category
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -25,8 +26,10 @@ import kotlin.test.assertTrue
  * that it settles and that it starves back to the floor, not that it reaches a number.
  * Time windows are taken from the metrics (when each pile ran out), not hard-coded.
  *
- * To try another seed: `SCENARIO_SEED=2 ./gradlew test --tests '*ColonyScenarioTest' --rerun`.
+ * It takes a few minutes, so it runs in `./gradlew slowTest`, not in `test` or `check`.
+ * To try another seed: `SCENARIO_SEED=2 ./gradlew slowTest`.
  */
+@Category(SlowTests::class)
 class ColonyScenarioTest {
     class Sample(
         val seconds: Double,
@@ -62,13 +65,16 @@ class ColonyScenarioTest {
         /** The single-pile run only needs to reach its settled size. */
         const val SINGLE_SECONDS = 450.0
 
-        private val pool = Executors.newFixedThreadPool(2) { r -> Thread(r, "scenario").apply { isDaemon = true } }
-        private val twoPiles = CompletableFuture.supplyAsync({ simulate(PILES, MAX_SECONDS, untilForgotten = true) }, pool)
-        private val onePile = CompletableFuture.supplyAsync({ simulate(PILES.take(1), SINGLE_SECONDS, untilForgotten = false) }, pool)
+        /** Both runs start together, on first use (not when the class loads). */
+        private val runs by lazy {
+            val pool = Executors.newFixedThreadPool(2) { r -> Thread(r, "scenario").apply { isDaemon = true } }
+            CompletableFuture.supplyAsync({ simulate(PILES, MAX_SECONDS, untilForgotten = true) }, pool) to
+                CompletableFuture.supplyAsync({ simulate(PILES.take(1), SINGLE_SECONDS, untilForgotten = false) }, pool)
+        }
 
-        val run: List<Sample> get() = twoPiles.get().samples
-        val colony: AntColony get() = twoPiles.get().colony
-        val single: List<Sample> get() = onePile.get().samples
+        val run: List<Sample> get() = runs.first.get().samples
+        val colony: AntColony get() = runs.first.get().colony
+        val single: List<Sample> get() = runs.second.get().samples
 
         private fun simulate(piles: List<Pair<Double, Double>>, maxSeconds: Double, untilForgotten: Boolean): Run {
             val c = AntColony(seed = SEED, gridSize = GRID)

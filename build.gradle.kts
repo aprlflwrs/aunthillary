@@ -48,6 +48,23 @@ val jsTest = tasks.register<Exec>("jsTest") {
 }
 tasks.check { dependsOn(jsTest) }
 
+// Long simulation tests, marked @Category(SlowTests::class) (src/test/kotlin/.../SlowTests.kt),
+// are left out of `test` and `check` and run with `./gradlew slowTest`.
+val slowCategory = "net.aprlflwrs.aunthillary.SlowTests"
+tasks.test {
+    useJUnit { excludeCategories(slowCategory) }
+}
+tasks.register<Test>("slowTest") {
+    group = "verification"
+    description = "Runs the long simulation tests (category SlowTests), which check leaves out."
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnit { includeCategories(slowCategory) }
+    shouldRunAfter(tasks.test)
+    // The scenario test reads SCENARIO_SEED to try other seeds; changing it must rerun the task.
+    inputs.property("scenarioSeed", System.getenv("SCENARIO_SEED") ?: "")
+}
+
 // The headless runner (src/main/kotlin/.../Headless.kt): runs the colony without a browser, as
 // fast as the CPU allows, and writes pheromone images and a metrics CSV. Not part of check.
 //   ./gradlew runHeadless --args="--seed 1 --duration 600 --food 400,300 --food 160,380"
