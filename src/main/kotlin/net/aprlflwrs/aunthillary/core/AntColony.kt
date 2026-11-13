@@ -202,7 +202,12 @@ class AntColony(
     private fun syncParams() {
         if (params.version == seenVersion) return
         for (info in params.specs()) {
-            if (seenValues[info.key] != info.value) {
+            val seen = seenValues[info.key]
+            if (seen == null) {
+                // Declared after the colony was built (the trail detector declares its own
+                // parameters in this registry): not a change, so not logged.
+                seenValues[info.key] = info.value
+            } else if (seen != info.value) {
                 log.add(tick, Action.SetParam(info.key, info.value))
                 seenValues[info.key] = info.value
             }
@@ -299,6 +304,9 @@ class AntColony(
         val scent2 = p.scentRadius.value * p.scentRadius.value
         val scentTurn = p.scentTurnRate.value * dt
         val emptyWeight = p.emptyWeight.value
+        val recruitShare = p.recruitShare.value
+        val randomShare = p.randomShare.value
+        val prior = p.headingPrior.value
         val range = p.range.value
         val walkBurn = 1.0 / range
         val returnSafety = p.returnSafety.value
@@ -376,6 +384,7 @@ class AntColony(
                     val bx = near.x - x0
                     val by = near.y - y0
                     if (bx * bx + by * by < pickup2) { x = x0; y = y0 }
+                    if (tripTime > giveUp) { flags = leaveCrowd(i, flags); h += PI }
                 } else if (near != null && nearD2 < pickup2) {
                     val load = minOf(1.0, near.amount)
                     near.yieldLeft -= load
@@ -393,6 +402,7 @@ class AntColony(
                     val ty = near.y - y
                     val diff = StrictMath.atan2(c * ty - s * tx, c * tx + s * ty)
                     h += diff.coerceIn(-scentTurn, scentTurn)
+                    if (tripTime > giveUp) { flags = leaveCrowd(i, flags); h += PI }
                 } else {
                     if (follow && nestD2 > hub2) {
                         h += steer(foodLayer, x, y, c, s, ca, sa, sd, threshold, turn, ants.fidelity[i].toDouble())
@@ -416,13 +426,25 @@ class AntColony(
                     headings.record(angle, -emptyWeight)
                     totalEmptyReturns++
                 }
+                val carried = flags and Ants.CARRYING != 0
                 eat(i, mealSize)
                 flags = flags and Ants.SCOUT
                 ants.pile[i] = 0
                 ants.eventAngle[i] = Float.NaN
                 ants.tripTime[i] = 0f
                 ants.strength[i] = 1f
-                h += PI
+                // Recruitment at meals: an ant that came home without food draws a fresh preferred
+                // heading from the distribution, the same way a newborn does, and sets off that way.
+                // A forager that brought food keeps its heading and goes back the way it came: it
+                // has just found food there, and the distribution would mostly send it there anyway.
+                if (!carried && rng.nextDouble() < recruitShare) {
+                    val pref = headings.sample(rng, randomShare, prior)
+                    ants.prefCos[i] = StrictMath.cos(pref).toFloat()
+                    ants.prefSin[i] = StrictMath.sin(pref).toFloat()
+                    h = pref
+                } else {
+                    h += PI
+                }
             } else {
                 // Returning: follow home pheromone, with a weak pull toward the nest as a backup.
                 if (follow && nestD2 > hub2) {
@@ -487,6 +509,17 @@ class AntColony(
         pileList.firstOrNull { it.id == pileId }?.let { it.delivered++ }
         store += 1
         moundHeight = minOf(moundHeight + p.moundGrowth.value, p.moundMax.value)
+    }
+
+    /**
+     * Ant [i] gives up waiting at a pile that is being worked as fast as it yields (the give-up
+     * timer keeps running inside a pile's scent) and heads home empty-handed. It found food, so
+     * its trip doesn't count against the direction. Returns the new flags.
+     */
+    private fun leaveCrowd(i: Int, flags: Int): Int {
+        ants.eventAngle[i] = Float.NaN
+        ants.tripTime[i] = 0f
+        return (flags and Ants.SCOUT) or Ants.RETURNING
     }
 
     /** Ant [i] is at the nest: it eats from the store until full, or until the store is empty. */
