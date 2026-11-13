@@ -228,6 +228,12 @@ class HeadlessRun(private val o: HeadlessOptions) {
             .format(Locale.ROOT, total.antsNanos / n / 1e6, total.pheromoneNanos / n / 1e6, total.otherNanos / n / 1e6))
         println("Wrote ${o.out}/metrics.csv, ${o.out}/actions.log" + if (pngEvery > 0) " and pheromone images" else "")
         voices?.score?.let { println("Voices: " + it.describe()) }
+        if (colony.terrain.gateAngles.isNotEmpty()) {
+            // So an experiment can place food in line with a gate of the nest ring.
+            println("Ring gates (degrees): " + colony.terrain.gateAngles.joinToString(" ") {
+                "%.1f".format(Locale.ROOT, Math.toDegrees(HeadingDistribution.wrap(it)))
+            })
+        }
         return Summary(metrics.rows, metrics.linkedAnyRows, metrics.linkedTwoRows, colony.totalDelivered, metrics.swing,
             voices?.score, colony.totalStarved, colony.totalDied - colony.totalStarved)
     }
