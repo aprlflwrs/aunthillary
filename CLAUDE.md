@@ -5,6 +5,7 @@
 ## Commands
 
 - `./gradlew check`: Kotlin tests, then the JavaScript tests under Node (skipped if Node is missing)
+- `./gradlew slowTest`: the long simulation tests (the colony scenario), which `check` leaves out; run before committing colony changes
 - `./gradlew run`: start the server at http://localhost:8080
 - `./gradlew buildFatJar`: build `build/libs/aunthillary.jar` (run it with `java -jar build/libs/aunthillary.jar`)
 - `./gradlew runHeadless --args="--help"`: run the colony without a browser (metrics CSV, pheromone images, replays, the lesion test)
