@@ -148,6 +148,19 @@ class ColonyParams(val params: Params) {
     val rockRadius = p("terrain.rockRadius", "Largest rock radius (units, on reset)", "Terrain", 1.0, 40.0, 0.5, 8.0)
     /** No rocks within this distance of the nest. */
     val rockClearance = p("terrain.rockClearance", "Rock-free radius round the nest (on reset)", "Terrain", 0.0, 200.0, 1.0, 40.0)
+    /**
+     * A ring of rock round the nest with a few gates (see [Terrain.addNestRing]), so trails
+     * heading the same way share a trunk through a gate. 0 = off: the terrain is exactly as without it.
+     */
+    val nestRing = p("terrain.nestRing", "Rock ring round the nest (1 = on, on reset)", "Terrain", 0.0, 1.0, 1.0, 0.0)
+    val ringRadius = p("terrain.ringRadius", "Ring inner radius (units, on reset)", "Terrain", 5.0, 150.0, 1.0, 24.0)
+    val ringThickness = p("terrain.ringThickness", "Ring thickness (units, on reset)", "Terrain", 1.0, 100.0, 1.0, 20.0)
+    val ringGates = p("terrain.ringGates", "Gates in the ring (on reset)", "Terrain", 1.0, 16.0, 1.0, 5.0)
+    val gateWidth = p("terrain.gateWidth", "Gate width (units, on reset)", "Terrain", 1.0, 60.0, 0.5, 8.0)
+    /** How far a gate may stray from even spacing, as a share of half the spacing. */
+    val gateJitter = p("terrain.gateJitter", "Gate placement jitter (0–1, on reset)", "Terrain", 0.0, 1.0, 0.05, 0.5)
+    /** Above 0, the ring is a passable ridge this high instead of rock. */
+    val ridgeHeight = p("terrain.ringRidgeHeight", "Ring as a ridge: height (0 = rock, on reset)", "Terrain", 0.0, 50.0, 0.5, 0.0)
 
     // ---- Flood ----
     val floodScatter = p("flood.scatter", "Flood scatter distance (units)", "Flood", 0.0, 512.0, 1.0, 120.0)

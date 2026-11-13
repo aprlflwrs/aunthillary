@@ -240,6 +240,14 @@ class AntColony(
             rng, p.hillHeight.value, p.hillScale.value, p.rockCount.value.toInt(), p.rockRadius.value,
             nestX, nestY, p.rockClearance.value,
         )
+        if (p.nestRing.value >= 0.5) {
+            val outer = p.ringRadius.value + p.ringThickness.value
+            terrain.addNestRing(
+                rng, nestX, nestY, p.ringRadius.value, p.ringThickness.value, p.ringGates.value.toInt(),
+                p.gateWidth.value, p.gateJitter.value, clearTo = outer + 2 * p.rockRadius.value,
+                ridgeHeight = p.ridgeHeight.value,
+            )
+        }
         rebuildTerrain()
         // The first ants have random ages, so they don't all die in the same moment.
         repeat(p.initialAnts.value.toInt().coerceAtMost(p.populationCap.value.toInt())) {

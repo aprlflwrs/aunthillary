@@ -1,5 +1,7 @@
 package net.aprlflwrs.aunthillary.core
 
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.random.Random
 
 /**
@@ -42,6 +44,7 @@ class Terrain(val size: Int) {
         }
 
         blocked.fill(false)
+        gateAngles = emptyList()
         repeat(rockCount) {
             val rx = rng.nextDouble(World.SIZE)
             val ry = rng.nextDouble(World.SIZE)
@@ -57,6 +60,83 @@ class Terrain(val size: Int) {
                 val ex = (c + 0.5) * cell - rx
                 val ey = (r + 0.5) * cell - ry
                 if (ex * ex + ey * ey <= rr * rr) blocked[r * size + c] = true
+            }
+        }
+    }
+
+    /**
+     * Directions (radians, counterclockwise from east) of the gates in the nest ring, or empty
+     * when there is no ring. Set by [addNestRing], cleared by [generate].
+     */
+    var gateAngles: List<Double> = emptyList()
+        private set
+
+    /**
+     * Walls the nest in with a ring of rock, broken by [gates] gaps, so that ants leaving or
+     * reaching the nest funnel through a few corridors. Call it after [generate].
+     *
+     * Why: the trail detector starts tracing at the hub's edge, and without obstacles trails to
+     * nearby piles split before they get there, so voices never share an opening. Trails
+     * heading roughly the same way now have to pass through the same gate, which gives them a
+     * common trunk from the hub's edge to the far side of the ring, for a reason that lies in
+     * the ground rather than in the detector.
+     *
+     * The ring is the annulus from [inner] to [inner] + [thickness] around the nest. Each gate
+     * is a straight radial channel [gateWidth] wide (parallel-sided, so it is a corridor of the
+     * same width all the way through rather than a wedge). Gates are spaced evenly round the
+     * circle from a random starting angle, and each is moved by up to [jitter] × half the
+     * spacing, so their layout varies with the seed while no direction is ever far from a gate.
+     * Each channel is also cleared of the random rocks from [generate] out to [clearTo] from the
+     * nest, so a rock lying just outside the ring can never block a gate.
+     *
+     * A channel is always at least one and a half cells wide, so a gate survives on a coarse
+     * terrain grid (the tests use 8-unit cells).
+     *
+     * With [ridgeHeight] above 0 the ring is a ridge instead of rock: nothing is blocked, and the
+     * ring's cells are raised in a tent-shaped profile, [ridgeHeight] high along its middle. Ants
+     * cannot steer by slope, but they climb slowly ([ColonyParams.slopePenalty]) and lay less
+     * pheromone the longer their trip has taken, so a trail over the ridge should end up weaker
+     * than one through a gate. A ridge can funnel only that softly, but it cannot trap an ant.
+     *
+     * It draws from [rng] only when called, so a colony without the ring uses exactly the same
+     * random numbers as before the ring existed, and its terrain and ants are unchanged.
+     */
+    fun addNestRing(
+        rng: Random, nestX: Double, nestY: Double, inner: Double, thickness: Double, gates: Int,
+        gateWidth: Double, jitter: Double, clearTo: Double, ridgeHeight: Double = 0.0,
+    ) {
+        val spacing = 2 * PI / gates.coerceAtLeast(1)
+        val start = rng.nextDouble() * 2 * PI
+        val angles = List(gates.coerceAtLeast(0)) { k ->
+            start + k * spacing + (rng.nextDouble() * 2 - 1) * jitter * spacing / 2
+        }
+        gateAngles = angles
+        val outer = inner + thickness
+        val half = maxOf(gateWidth / 2, 0.75 * cell)
+        // Only cells within reach of the ring or a cleared channel can change.
+        val reach = maxOf(outer, clearTo) + cell
+        val c0 = ((nestX - reach) * invCell).toInt().coerceIn(0, size - 1)
+        val c1 = ((nestX + reach) * invCell).toInt().coerceIn(0, size - 1)
+        val r0 = ((nestY - reach) * invCell).toInt().coerceIn(0, size - 1)
+        val r1 = ((nestY + reach) * invCell).toInt().coerceIn(0, size - 1)
+        val dirs = angles.map { StrictMath.cos(it) to StrictMath.sin(it) }
+        for (r in r0..r1) for (c in c0..c1) {
+            val dx = (c + 0.5) * cell - nestX
+            val dy = (r + 0.5) * cell - nestY
+            val d = StrictMath.sqrt(dx * dx + dy * dy)
+            // In a gate's channel: on the gate's side of the nest, and within half its width of
+            // the line from the nest through the gate.
+            val inGate = dirs.any { (gx, gy) -> dx * gx + dy * gy > 0 && abs(dx * gy - dy * gx) <= half }
+            val i = r * size + c
+            if (inGate) {
+                if (d <= clearTo) blocked[i] = false
+            } else if (d in inner..outer) {
+                if (ridgeHeight > 0) {
+                    val fromMiddle = abs(d - (inner + outer) / 2) / (thickness / 2)
+                    hills[i] += (ridgeHeight * (1 - fromMiddle)).toFloat()
+                } else {
+                    blocked[i] = true
+                }
             }
         }
     }
