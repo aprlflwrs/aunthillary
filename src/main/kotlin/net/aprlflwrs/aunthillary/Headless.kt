@@ -7,7 +7,10 @@ import net.aprlflwrs.aunthillary.core.HeadingDistribution
 import net.aprlflwrs.aunthillary.core.LoggedAction
 import net.aprlflwrs.aunthillary.core.Replayer
 import net.aprlflwrs.aunthillary.core.TrailMetrics
+import net.aprlflwrs.aunthillary.core.Voice
 import net.aprlflwrs.aunthillary.core.World
+import net.aprlflwrs.aunthillary.trails.DetectorInput
+import net.aprlflwrs.aunthillary.trails.TrailDetector
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
@@ -62,6 +65,7 @@ private val usage = """
       --csv-every S        seconds between metrics rows (default 1)
       --png-every S        seconds between pheromone images, 0 for none (default 30)
       --link-threshold D   food density counted as trail when testing links (default ${TRAIL_THRESHOLD})
+      --no-detector        don't run the trail detector (faster; the voice columns stay empty)
       --profile N          hold the population at N ants (fixed-population mode) to profile the tick
       --swing-window S     seconds of history behind the population swing columns (default 900)
       --baseline N         run the script twice at a fixed population of N, as the colony and with
@@ -94,6 +98,7 @@ data class HeadlessOptions(
     val pngEvery: Double = 30.0,
     val linkThreshold: Double = TRAIL_THRESHOLD,
     val profileAnts: Int? = null,
+    val detector: Boolean = true,
     val swingWindow: Double = 900.0,
     val baseline: Int? = null,
     val lesion: Boolean = false,
@@ -140,6 +145,7 @@ data class HeadlessOptions(
                     "--png-every" -> o.copy(pngEvery = num(value()))
                     "--link-threshold" -> o.copy(linkThreshold = num(value()))
                     "--profile" -> o.copy(profileAnts = num(value()).toInt())
+                    "--no-detector" -> o.copy(detector = false)
                     "--swing-window" -> o.copy(swingWindow = num(value()))
                     "--baseline" -> o.copy(baseline = num(value()).toInt())
                     "--lesion" -> o.copy(lesion = true)
@@ -184,21 +190,28 @@ fun seconds(s: Double): Long = Math.round(s * World.TICKS_PER_SECOND)
 /** One headless run: replays the script, writing metrics and images as it goes. */
 class HeadlessRun(private val o: HeadlessOptions) {
     /** What a finished run hands back, for the baseline comparison. */
-    class Summary(val seconds: Int, val linkedAny: Int, val linkedTwo: Int, val delivered: Long, val swing: PopulationSwing)
+    class Summary(
+        val seconds: Int, val linkedAny: Int, val linkedTwo: Int, val delivered: Long, val swing: PopulationSwing,
+        val voices: VoiceScore?, val starved: Long, val oldAge: Long,
+    )
 
     fun run(): Summary {
         o.out.mkdirs()
         val colony = AntColony(o.seed, gridSize = o.grid)
+        // Built before the replay starts: it declares its own parameters in the colony's
+        // registry, so a logged change to one of them can be replayed.
+        val voices = if (o.detector) HeadlessDetection(colony) else null
         val replayer = Replayer(colony, o.script())
         val steps = seconds(o.duration)
         val csvEvery = seconds(o.csvEvery).coerceAtLeast(1)
         val pngEvery = seconds(o.pngEvery)
-        val metrics = MetricsWriter(File(o.out, "metrics.csv"), o.linkThreshold, o.swingWindow)
+        val metrics = MetricsWriter(File(o.out, "metrics.csv"), o.linkThreshold, o.swingWindow, voices?.score)
         val started = System.nanoTime()
         metrics.write(colony)
         var stepsDone = 0L
         replayer.run(steps) {
             stepsDone++
+            voices?.afterStep()
             if (stepsDone % csvEvery == 0L) metrics.write(colony)
             if (pngEvery > 0 && stepsDone % pngEvery == 0L) {
                 writePheromonePng(colony, File(o.out, "pheromone_%06d.png".format(stepsDone)))
@@ -214,7 +227,97 @@ class HeadlessRun(private val o: HeadlessOptions) {
         println("Average ms per tick: ants %.3f, pheromone %.3f, other %.3f"
             .format(Locale.ROOT, total.antsNanos / n / 1e6, total.pheromoneNanos / n / 1e6, total.otherNanos / n / 1e6))
         println("Wrote ${o.out}/metrics.csv, ${o.out}/actions.log" + if (pngEvery > 0) " and pheromone images" else "")
-        return Summary(metrics.rows, metrics.linkedAnyRows, metrics.linkedTwoRows, colony.totalDelivered, metrics.swing)
+        voices?.score?.let { println("Voices: " + it.describe()) }
+        return Summary(metrics.rows, metrics.linkedAnyRows, metrics.linkedTwoRows, colony.totalDelivered, metrics.swing,
+            voices?.score, colony.totalStarved, colony.totalDied - colony.totalStarved)
+    }
+}
+
+/**
+ * The trail detector, run in step with the ticks: every [DETECT_EVERY] ticks it takes a
+ * snapshot of the colony, finds the voices, and hands them to `colony.voices`, the same way
+ * the server's tick loop does (see `TickLoop.startDetection`), except that it waits for the
+ * result instead of running it on another coroutine, so a fast-forwarded run never outpaces
+ * it and the result is deterministic. After a reset or flood it clears the detector's memory
+ * and the voices, as the server does. Nothing it produces feeds back into the colony.
+ */
+class HeadlessDetection(private val colony: AntColony) {
+    private val detector = TrailDetector(colony.params)
+    val score = VoiceScore()
+    private var seenActions = 0
+
+    fun afterStep() {
+        // A reset or flood since the last step makes the detector's memory stale.
+        val actions = colony.log.actions
+        while (seenActions < actions.size) {
+            val a = actions[seenActions++].action
+            if (a == Action.Reset || a == Action.Flood) { detector.reset(); colony.voices = emptyList() }
+        }
+        if (colony.tick % DETECT_EVERY != 0L) return
+        val state = colony.state()
+        val input = DetectorInput.of(colony.tick, colony.pheromone(), colony.terrain(), state.nest, state.food, colony.p.displayMax.value)
+        colony.voices = detector.detect(input)
+        score.add(colony.voices)
+    }
+
+    companion object {
+        /** Twice a second, as on the server. */
+        const val DETECT_EVERY = 15L
+    }
+}
+
+/**
+ * The comparison's three numbers (see Timeline & Risks in the plan), counted over every
+ * detection: the share of detections with at least one voice, the share with at least two,
+ * and, over the detections with at least two, the average length of the opening that pairs of
+ * voices share. That length is the matching prefix of the two voices' point lists, in world
+ * units: points at the same index closer than [MATCH] count as matching, and the length is
+ * the distance walked along the first voice through the last matching point.
+ */
+class VoiceScore {
+    var detections = 0; private set
+    var withOne = 0; private set
+    var withTwo = 0; private set
+    private var sharedSum = 0.0
+    /** The latest detection's mean shared opening over its pairs, or NaN with fewer than two voices. */
+    var lastShared = Double.NaN; private set
+    var lastCount = 0; private set
+
+    fun add(voices: List<Voice>) {
+        detections++
+        lastCount = voices.size
+        if (voices.isNotEmpty()) withOne++
+        lastShared = Double.NaN
+        if (voices.size >= 2) {
+            withTwo++
+            var sum = 0.0; var pairs = 0
+            for (a in voices.indices) for (b in a + 1 until voices.size) { sum += shared(voices[a], voices[b]); pairs++ }
+            lastShared = sum / pairs
+            sharedSum += lastShared
+        }
+    }
+
+    val shareOne get() = withOne.toDouble() / detections.coerceAtLeast(1)
+    val shareTwo get() = withTwo.toDouble() / detections.coerceAtLeast(1)
+    /** Undefined (null) if there were never two voices at once, as the plan says: not zero. */
+    val meanShared: Double? get() = if (withTwo == 0) null else sharedSum / withTwo
+
+    fun describe() = "at least one %.1f%% of the time, at least two %.1f%%, shared opening %s"
+        .format(Locale.ROOT, 100 * shareOne, 100 * shareTwo, meanShared?.let { "%.1f units".format(Locale.ROOT, it) } ?: "undefined")
+
+    companion object {
+        const val MATCH = 1.0
+
+        fun shared(a: Voice, b: Voice): Double {
+            val n = minOf(a.points.size, b.points.size)
+            var length = 0.0
+            for (k in 0 until n) {
+                val pa = a.points[k]; val pb = b.points[k]
+                if (StrictMath.hypot(pa[0] - pb[0], pa[1] - pb[1]) > MATCH) break
+                if (k > 0) length += StrictMath.hypot(pa[0] - a.points[k - 1][0], pa[1] - a.points[k - 1][1])
+            }
+            return length
+        }
     }
 }
 
@@ -260,9 +363,8 @@ class Baseline(private val o: HeadlessOptions) {
         val colony = HeadlessRun(o.copy(out = File(o.out, "colony"), set = o.set + fixed)).run()
         val baseline = HeadlessRun(o.copy(out = File(o.out, "baseline"), set = o.set + fixed + ("ants.followTrails" to 0.0))).run()
         val line = { name: String, r: HeadlessRun.Summary ->
-            "%-9s delivered %7d; at least one pile linked %5.1f%% of the time, at least two %5.1f%%"
-                .format(Locale.ROOT, name, r.delivered, 100.0 * r.linkedAny / r.seconds.coerceAtLeast(1),
-                    100.0 * r.linkedTwo / r.seconds.coerceAtLeast(1))
+            "%-9s voices: %s; delivered %d, starved %d, died of age %d"
+                .format(Locale.ROOT, name, r.voices?.describe() ?: "(detector off)", r.delivered, r.starved, r.oldAge)
         }
         println("Comparison at a fixed population of ${n.toInt()}:")
         println(line("colony", colony))
@@ -272,7 +374,9 @@ class Baseline(private val o: HeadlessOptions) {
 }
 
 /** The metrics CSV: one row per interval. Stage timings are averages over the interval. */
-class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: Double = 900.0) {
+class MetricsWriter(
+    file: File, private val linkThreshold: Double, swingWindow: Double = 900.0, private val voices: VoiceScore? = null,
+) {
     private val w = file.bufferedWriter()
     private var last: net.aprlflwrs.aunthillary.core.StageProfile.Snapshot? = null
     val swing = PopulationSwing(swingWindow)
@@ -283,7 +387,8 @@ class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: 
     init {
         w.write("tick,seconds,population,store,mound,piles,food_left,delivered,empty_returns,piles_linked," +
             "symbols,symbol_directions,food_pheromone,home_pheromone,ms_ants,ms_pheromone,ms_other," +
-            "hatched,starved,old_age,eating_rate,pop_mean,pop_swing,pop_period\n")
+            "hatched,starved,old_age,eating_rate,pop_mean,pop_swing,pop_period," +
+            "voices,voice_share_1,voice_share_2,shared_opening\n")
     }
 
     fun write(colony: AntColony) {
@@ -323,6 +428,10 @@ class MetricsWriter(file: File, private val linkThreshold: Double, swingWindow: 
             (colony.totalDied - colony.totalStarved).toString(),
             f(colony.eatingRate),
             f(swing.mean), f(swing.swing), if (swing.period.isNaN()) "" else f(swing.period),
+            voices?.lastCount?.toString() ?: "",
+            voices?.let { f(it.shareOne) } ?: "",
+            voices?.let { f(it.shareTwo) } ?: "",
+            voices?.lastShared?.takeIf { !it.isNaN() }?.let { f(it) } ?: "",
         ).joinToString(",") + "\n")
     }
 

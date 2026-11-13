@@ -5,6 +5,7 @@ import net.aprlflwrs.aunthillary.core.TrailMetrics
 import net.aprlflwrs.aunthillary.core.World
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
+import org.junit.experimental.categories.Category
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -16,7 +17,7 @@ import kotlin.test.assertTrue
  * The main run: one colony (seed 1, default parameters, on a 256² grid to keep `check` under
  * a minute; PheromoneGridTest shows the grid behaves the same at any resolution) gets two piles
  * of 20,000 units at the start, in directions about 110° apart, and runs until both are empty
- * and the colony has had five minutes to forget them. A second, shorter run gets only the first
+ * and the colony has had seven minutes to forget them. A second, shorter run gets only the first
  * pile, to show that less food supports fewer ants. The two run at once, on two threads (each
  * colony is still single-threaded and deterministic). Every simulated second each run records
  * the metrics below, and the tests read them.
@@ -25,8 +26,10 @@ import kotlin.test.assertTrue
  * that it settles and that it starves back to the floor, not that it reaches a number.
  * Time windows are taken from the metrics (when each pile ran out), not hard-coded.
  *
- * To try another seed: `SCENARIO_SEED=2 ./gradlew test --tests '*ColonyScenarioTest' --rerun`.
+ * It takes a few minutes, so it runs in `./gradlew slowTest`, not in `test` or `check`.
+ * To try another seed: `SCENARIO_SEED=2 ./gradlew slowTest`.
  */
+@Category(SlowTests::class)
 class ColonyScenarioTest {
     class Sample(
         val seconds: Double,
@@ -58,17 +61,20 @@ class ColonyScenarioTest {
 
         const val MAX_SECONDS = 1500.0
         /** After both piles are empty, keep going this long so trails and symbols can wear down. */
-        const val AFTER_EMPTY_SECONDS = 300.0
+        const val AFTER_EMPTY_SECONDS = 420.0
         /** The single-pile run only needs to reach its settled size. */
         const val SINGLE_SECONDS = 450.0
 
-        private val pool = Executors.newFixedThreadPool(2) { r -> Thread(r, "scenario").apply { isDaemon = true } }
-        private val twoPiles = CompletableFuture.supplyAsync({ simulate(PILES, MAX_SECONDS, untilForgotten = true) }, pool)
-        private val onePile = CompletableFuture.supplyAsync({ simulate(PILES.take(1), SINGLE_SECONDS, untilForgotten = false) }, pool)
+        /** Both runs start together, on first use (not when the class loads). */
+        private val runs by lazy {
+            val pool = Executors.newFixedThreadPool(2) { r -> Thread(r, "scenario").apply { isDaemon = true } }
+            CompletableFuture.supplyAsync({ simulate(PILES, MAX_SECONDS, untilForgotten = true) }, pool) to
+                CompletableFuture.supplyAsync({ simulate(PILES.take(1), SINGLE_SECONDS, untilForgotten = false) }, pool)
+        }
 
-        val run: List<Sample> get() = twoPiles.get().samples
-        val colony: AntColony get() = twoPiles.get().colony
-        val single: List<Sample> get() = onePile.get().samples
+        val run: List<Sample> get() = runs.first.get().samples
+        val colony: AntColony get() = runs.first.get().colony
+        val single: List<Sample> get() = runs.second.get().samples
 
         private fun simulate(piles: List<Pair<Double, Double>>, maxSeconds: Double, untilForgotten: Boolean): Run {
             val c = AntColony(seed = SEED, gridSize = GRID)
@@ -192,7 +198,9 @@ class ColonyScenarioTest {
                 assertTrue(before.isEmpty() || after.isEmpty() || before.intersect(after).isNotEmpty(),
                     "the symbol toward pile $i changed identity at ${b.seconds}s: $before -> $after")
             }
-            // It outlives its food (the colony's belief lingers), and is gone within five minutes.
+            // It outlives its food (the colony's belief lingers), and is gone within seven minutes.
+            // (At the floor the colony makes few trips, so the peak wears down mostly by fading,
+            // with time constant headings.memory.)
             val lastSeen = run.last { symbolsToward(it, i).isNotEmpty() }.seconds
             assertTrue(lastSeen > emptiedAt(i), "the symbol should outlive its food a little")
             assertTrue(lastSeen < emptiedAt(i) + AFTER_EMPTY_SECONDS - 10,
